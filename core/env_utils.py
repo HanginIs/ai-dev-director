@@ -53,19 +53,27 @@ def resolve_cli(name: str) -> Optional[str]:
 
     local_app_data = Path(os.environ.get("LOCALAPPDATA", ""))
     app_data = Path(os.environ.get("APPDATA", ""))
+    home = Path.home()
+    # macOS/Linux (unverified): native installer -> ~/.local/bin, Homebrew -> /opt/homebrew/bin, npm -g -> /usr/local/bin
+    posix_dirs = [home / ".local" / "bin", Path("/opt/homebrew/bin"), Path("/usr/local/bin")]
 
     known = {
         "claude": [
             app_data / "npm" / "claude.cmd",
-            app_data / "npm" / "claude"
+            app_data / "npm" / "claude",
+            *[d / "claude" for d in posix_dirs],
+            home / ".claude" / "local" / "claude",
         ],
         "codex": [
             app_data / "npm" / "codex.cmd",
-            app_data / "npm" / "codex"
+            app_data / "npm" / "codex",
+            *[d / "codex" for d in posix_dirs],
         ],
         "agy": [
             local_app_data / "agy" / "bin" / "agy.exe",
-            local_app_data / "agy" / "bin" / "agy.cmd"
+            local_app_data / "agy" / "bin" / "agy.cmd",
+            *[d / "agy" for d in posix_dirs],
+            home / ".agy" / "bin" / "agy",
         ]
     }
 

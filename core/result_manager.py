@@ -8,6 +8,7 @@ every target path is canonically re-checked at apply time, nothing touches the m
 human action carrying a request_id, and a failed apply/verify restores the main tree from the backup.
 """
 import os
+import sys
 import json
 import hashlib
 import shutil
@@ -326,9 +327,11 @@ class ResultManager:
 
     @staticmethod
     def _open(path: str) -> Dict[str, Any]:
-        if os.name != "nt":
-            return {"status": "refused", "reason": "explorer is only available on Windows"}
-        subprocess.Popen(["explorer.exe", path])                     # argv, shell=False
+        argv = ["explorer.exe", path] if os.name == "nt" else (["open", path] if sys.platform == "darwin" else ["xdg-open", path])
+        try:
+            subprocess.Popen(argv)                                   # argv, shell=False
+        except OSError as exc:
+            return {"status": "refused", "reason": f"file manager unavailable: {exc}"}
         return {"status": "ok", "path": path}
 
     # ------------------------------------------------------------------ preconditions + manifest

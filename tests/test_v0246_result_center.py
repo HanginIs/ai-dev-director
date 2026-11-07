@@ -284,4 +284,5 @@ def test_q_no_git_mutation_commands_in_result_manager():
     src = Path("core/result_manager.py").read_text(encoding="utf-8")
     for forbidden in ("shell=True", '"merge"', '"commit"', '"push"', '"stash"', '"reset"', "--hard"):
         assert forbidden not in src, forbidden
-    assert '["worktree", "remove", "--force"' in src and 'Popen(["explorer.exe"' in src
+    # v3.1.8: the folder is opened with the platform file manager (explorer.exe / open / xdg-open), still argv-only
+    assert '["worktree", "remove", "--force"' in src and '"explorer.exe"' in src and '"xdg-open"' in src and "Popen(argv)" in src

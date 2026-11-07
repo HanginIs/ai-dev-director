@@ -6,7 +6,9 @@ HEAD / BUILDER / REVIEWER, and turns a one-line goal into tested, independently 
 pay-per-use API call.
 
 > 상태: 개인 운영 환경에서 매일 쓰고 있는 코드를 그대로 공개한 것입니다. 윈도우 우선, 한국어 UI.
+> **macOS / Linux: 코드는 준비돼 있지만 미검증입니다** (v3.1.8, 아래 참고). 맥에서 돌려 보신 분은 이슈로 알려 주시면 고맙겠습니다.
 > Status: the code we run daily, published as-is. Windows-first, Korean UI, English comments.
+> **macOS / Linux: supported in code since v3.1.8 but not yet verified on a real Mac** — reports welcome.
 
 ---
 
@@ -46,7 +48,10 @@ pay-per-use API call.
 
 ## 요구 사항 (Requirements)
 
-- Windows 10/11 (경로 처리·폴더 선택 창·PowerShell 런처가 윈도우 기준. 핵심 로직은 POSIX에서도 동작하지만 미검증)
+- Windows 10/11 (매일 쓰는 환경). **macOS / Linux는 미검증**: 프로세스 트리 종료(psutil), 작업본 폴더 열기(`open` / `xdg-open`),
+  CLI 탐색(`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`), 셸 런처(`start-companion.sh`)까지 코드는 갖춰져 있으나
+  실제 맥에서 돌려 보지 못했습니다. 폴더 선택 창은 tkinter라 Homebrew 파이썬은 `brew install python-tk`가 필요하고,
+  없으면 콘솔에 경로를 직접 입력하면 됩니다.
 - Python 3.9+ 와 `pip install -r requirements.txt`
 - Git
 - 로그인된 CLI 중 최소 두 개: **Claude Code**(`claude`), **OpenAI Codex**(`codex`), **Google Antigravity**(`agy`).
@@ -56,10 +61,10 @@ pay-per-use API call.
 
 ```bash
 pip install -r requirements.txt
-python -m pytest -q            # 596개 테스트, CLI 없이 스텁으로 돕니다 (약 25분)
+python -m pytest -q            # 604개 테스트, CLI 없이 스텁으로 돕니다 (약 25분)
 ```
 
-2026-11-04 기준 593개 통과, 3개 실패. 실패 3개는 알려진 드리프트입니다: 두 개는 "저장소가 아닌 폴더는 거부"를
+2026-11-04 기준 593/596 통과, 3개 실패 (v3.1.8에서 플랫폼 분기 테스트 8개 추가, 윈도우에서 통과). 실패 3개는 알려진 드리프트입니다: 두 개는 "저장소가 아닌 폴더는 거부"를
 기대하는 옛 UI 테스트인데 v3.0부터 빈 폴더도 자동 준비(greenfield)하도록 바뀌었고, 하나는 스냅샷 제외 목록 픽스처
 드리프트입니다. 안전 게이트·정책·미션 테스트는 모두 통과합니다.
 
@@ -69,6 +74,16 @@ python -m pytest -q            # 596개 테스트, CLI 없이 스텁으로 돕�
 .\start-companion.ps1          # http://127.0.0.1:8081  (TRINITY 무대)  ·  /classic (작업실)
 .\stop-companion.ps1
 ```
+
+콘솔 켜기 (macOS / Linux, 미검증):
+
+```bash
+chmod +x start-companion.sh stop-companion.sh
+./start-companion.sh           # python3 companion_server.py 를 백그라운드로, PID는 data/companion.pid
+./stop-companion.sh
+```
+
+Antigravity CLI(`agy`)가 그 플랫폼에 없으면 `config.yaml`에서 BUILDER를 `codex` 또는 `claude`로 바꾸면 됩니다. CLI 두 개로도 동작합니다.
 
 CLI로 바로 한 번 돌리기:
 
@@ -101,7 +116,7 @@ core/                  orchestrator, mission, autopilot(정책), safety(Scope Gu
 schemas/               ORDER / BuilderResult / ReviewResult / Decision / Provenance (pydantic)
 console/               TRINITY 무대와 작업실 프런트엔드 (의존성 없는 정적 파일)
 scripts/               폴더 선택 도우미, CLI 진단, 실패 run 재시도, 역할 smoke
-tests/                 596 tests (스텁 CLI로 격리, 로컬 설정 파일에 의존하지 않음; 실제 CLI 통합은 -m integration_cli 로 opt-in)
+tests/                 604 tests (스텁 CLI로 격리, 로컬 설정 파일에 의존하지 않음; 실제 CLI 통합은 -m integration_cli 로 opt-in)
 docs/                  설계·마일스톤 기록
 ```
 
@@ -111,6 +126,7 @@ docs/                  설계·마일스톤 기록
 - 각 CLI의 구독 한도(쿼터)에 그대로 종속됩니다. 한도가 끝나면 장애 조치 순서대로 다른 CLI로 넘어갑니다.
 - 리뷰어와 HEAD가 같은 공급자로 몰리면 `REDUCED_INDEPENDENCE` 표시와 함께 통과시킵니다(숨기지 않음).
 - 테스트는 로컬 스텁 CLI로 돕니다. 실제 세 CLI를 끝까지 태우는 E2E는 opt-in 마커로만 돌아갑니다.
+- macOS / Linux는 미검증입니다. 일부 테스트는 윈도우 드라이브 문자 경로(`C:/...`)를 전제로 해서 그 플랫폼에서는 실패할 수 있으며, 제품 동작과는 무관합니다.
 
 ## 라이선스 (License)
 

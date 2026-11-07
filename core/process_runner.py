@@ -79,24 +79,25 @@ class ProcessTreeRunner:
     @staticmethod
     def kill_process_tree(pid: int) -> bool:
         """
-        Kills process and all its children via Windows taskkill /PID <pid> /T /F,
-        with psutil fallback.
+        Kills process and all its children. Windows: taskkill /PID <pid> /T /F first, psutil cleanup after.
+        macOS/Linux: psutil walks the tree itself (taskkill does not exist there).
         """
         if not psutil.pid_exists(pid):
             return True
 
-        # 1. Primary: Windows taskkill
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                shell=False,
-                timeout=5
-            )
-        except Exception as e:
-            logger.warning(f"taskkill failed on PID {pid}: {e}")
+        # 1. Primary on Windows: taskkill takes the whole tree down in one call
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    shell=False,
+                    timeout=5
+                )
+            except Exception as e:
+                logger.warning(f"taskkill failed on PID {pid}: {e}")
 
         # 2. Safety cleanup with psutil
         try:
