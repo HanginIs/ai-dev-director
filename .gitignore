@@ -16,3 +16,10 @@ companion.local.json
 *.token
 *.db
 *.sqlite3
+
+# Native macOS wrapper build output
+macos/.build/
+dist/
+
+# Python virtual environment
+.venv/

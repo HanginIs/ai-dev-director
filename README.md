@@ -12,6 +12,29 @@ pay-per-use API call.
 
 ---
 
+## macOS 전용 앱 (HanginIs fork)
+
+이 포크에는 Swift/AppKit + WKWebView 전용 앱과 macOS 실행 관련 수정이 포함됩니다.
+기존 CLI 로그인과 프로젝트 설정을 사용하며, 서버를 자동 실행하고 콘솔을 앱 창에 표시합니다.
+
+```bash
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+./script/build_and_run.sh
+```
+
+Xcode/Swift 5.9 이상, macOS 13 이상이 필요합니다. 결과는 `dist/AI-Dev-Director.app`입니다.
+앱은 빌드 시 저장소의 절대 경로를 기억하므로 저장소를 이동했다면 다시 빌드하세요.
+앱 자체는 응용 프로그램 폴더로 복사할 수 있습니다.
+`--build-only` 옵션은 앱을 실행하지 않고 빌드만 합니다.
+
+- 앱 안의 프로젝트 선택 버튼은 macOS 기본 폴더 선택 창을 엽니다.
+- 종료 시 서버를 백그라운드로 유지하거나 작업과 서버를 중지할 수 있습니다.
+- 실행 오류는 `data/desktop-server.log`에 기록됩니다.
+- 아이콘: AI-assisted artwork, 이 포크를 위해 생성. 원본은 `macos/Assets/AppIcon.png`.
+- 맥에서 앱 실행·콘솔 표시·폴더 선택 및 취소·서버 자동 시작을 수동 확인했습니다.
+  AI 개발 미션 전체의 성공을 보증하는 검증은 아니며, 공급자 오류는 별도로 확인해야 합니다.
+
 ## 무엇을 하나 (What it does)
 
 ```

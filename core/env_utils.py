@@ -1,5 +1,6 @@
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -74,6 +75,9 @@ def resolve_cli(name: str) -> Optional[str]:
             local_app_data / "agy" / "bin" / "agy.cmd",
             *[d / "agy" for d in posix_dirs],
             home / ".agy" / "bin" / "agy",
+            *([Path("/Applications/Gemini.app/Contents/Helpers/agy"),
+               home / "Applications/Gemini.app/Contents/Helpers/agy"]
+              if sys.platform == "darwin" else []),
         ]
     }
 

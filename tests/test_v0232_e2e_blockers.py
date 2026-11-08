@@ -219,7 +219,7 @@ def test_e_dashboard_single_instance(isolate_provider_db):
         listeners = _listeners_on(port)
         assert len(listeners) == 1, listeners
         assert listeners[0].laddr.ip == "127.0.0.1"
-        assert DashboardServer.allow_reuse_address is False
+        assert DashboardServer.allow_reuse_address is (os.name != "nt")
     finally:
         first.shutdown(); first.server_close()
 

@@ -9,17 +9,23 @@ def main() -> int:
         import tkinter
         from tkinter import filedialog
     except ImportError:          # e.g. Homebrew python on macOS without python-tk: type the path in the console instead
-        sys.stderr.write("tkinter unavailable
-")
+        sys.stderr.write("tkinter unavailable\n")
         return 1
     initial = sys.argv[1] if len(sys.argv) > 1 else ""
     root = tkinter.Tk()
     root.withdraw()
     root.attributes("-topmost", True)          # the dialog must not open behind the browser
     root.update()
-    chosen = filedialog.askdirectory(parent=root, initialdir=initial or None, mustexist=True,
-                                     title="AI DEV DIRECTOR - 작업할 폴더 선택")
-    root.destroy()
+    # On macOS an explicit parent creates a sheet attached to the withdrawn
+    # root. Omit that option so the native panel is independent and movable.
+    options = {"initialdir": initial or None, "mustexist": True,
+               "title": "AI DEV DIRECTOR - 작업할 폴더 선택"}
+    if sys.platform != "darwin":
+        options["parent"] = root
+    try:
+        chosen = filedialog.askdirectory(**options)
+    finally:
+        root.destroy()
     sys.stdout.buffer.write(json.dumps({"path": chosen or ""}).encode("ascii"))   # ensure_ascii: safe on any codepage
     return 0
 
