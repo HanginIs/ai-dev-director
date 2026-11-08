@@ -1,5 +1,6 @@
 import AppKit
 import WebKit
+import CoreServices
 
 final class DirectorApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     var window: NSWindow!
@@ -15,7 +16,9 @@ final class DirectorApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+        // Refresh the on-disk bundle registration, used by Dock after exit.
+        LSRegisterURL(Bundle.main.bundleURL as CFURL, true)
+        if let iconURL = Bundle.main.url(forResource: "DirectorIcon", withExtension: "icns"),
            let icon = NSImage(contentsOf: iconURL) {
             NSApp.applicationIconImage = icon
         }
