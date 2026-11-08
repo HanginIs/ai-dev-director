@@ -161,6 +161,10 @@ class MissionRunner:
                     break
         finally:
             latest = self.store.load(mission_id) or mission
+            # Only close the run after its worker has returned: releasing BUSY
+            # while the worker is still writing would allow overlapping runs.
+            from core.state_machine import StateMachine
+            finalize_stopped_runs(latest, StateMachine())
             latest["owner_pid"] = None
             self.store.save(latest)
         return self.store.load(mission_id)
@@ -439,6 +443,24 @@ class MissionRunner:
 class _NullLogger:
     def __getattr__(self, name):
         return lambda *a, **k: None
+
+
+def finalize_stopped_runs(mission: Dict[str, Any], sm) -> List[str]:
+    """Close unfinished runs of a STOPPED mission after its worker exits.
+
+    Completed results and worktrees are preserved. Callers repairing historical
+    records must first verify that the owning worker is no longer running.
+    """
+    if mission.get("status") != "STOPPED":
+        return []
+    closed = []
+    for step in mission.get("steps", []):
+        rid = step.get("run_id")
+        row = sm.get_run(rid) if rid else None
+        if row and row["current_state"] not in TERMINAL_STATES:
+            sm.transition_to(rid, State.FAIL, details="MISSION_STOPPED: " + (mission.get("blocked_reason") or "operator stopped mission"))
+            closed.append(rid)
+    return closed
 
 
 def stop_request(mission_id: str, reason: str = "", by: str = "사용자", store: Optional[MissionStore] = None) -> Optional[Dict[str, Any]]:

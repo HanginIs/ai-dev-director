@@ -74,3 +74,40 @@ def test_stop_missions_idle_when_nothing_runs(tmp_path, monkeypatch):
     monkeypatch.setattr(d, "active_session_id", lambda: "s")
     monkeypatch.setattr(d, "invalidate_status_cache", lambda: None)
     assert d.stop_missions("x")["status"] == "idle"
+
+
+def test_stopped_worker_releases_busy_only_after_exit(tmp_path):
+    from core.state_machine import StateMachine, State
+    sm = StateMachine()
+    store, m = _mission(tmp_path)
+    sm.create_run("RUN-STOP", m["project_path"], "interrupted work")
+    sm.create_run("RUN-PASS", m["project_path"], "completed work")
+    for state in [State.PLANNING, State.ORDER_READY, State.BUILDING,
+                  State.VERIFYING, State.REVIEWING, State.DECIDING, State.PASS]:
+        sm.transition_to("RUN-PASS", state)
+    m["steps"] = [{"run_id": "RUN-PASS"}, {"run_id": "RUN-STOP"}]
+    store.save(m)
+    runner = MissionRunner(lambda: None, store=store)
+
+    def advance(mission):
+        stop_request(mission["mission_id"], "operator", store=store)
+        assert d._project_busy(sm, m["project_path"])
+        return mission
+
+    runner._advance = advance
+    out = runner.run(m["mission_id"])
+    assert out["status"] == "STOPPED" and out["owner_pid"] is None
+    assert sm.get_run("RUN-STOP")["current_state"] == State.FAIL
+    assert sm.get_run("RUN-PASS")["current_state"] == State.PASS
+    assert not d._project_busy(sm, m["project_path"])
+
+
+def test_finalize_does_not_close_running_mission(tmp_path):
+    from core.mission import finalize_stopped_runs
+    from core.state_machine import StateMachine, State
+    sm = StateMachine()
+    _, m = _mission(tmp_path)
+    sm.create_run("RUN-LIVE", m["project_path"], "live")
+    m["steps"] = [{"run_id": "RUN-LIVE"}]
+    assert finalize_stopped_runs(m, sm) == []
+    assert sm.get_run("RUN-LIVE")["current_state"] == State.IDLE
