@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
+from core.autopilot import only_preexisting_failures
 from core.state_machine import StateMachine, State
 from core.safety import SafetyPolicy
 from core.git_manager import GitManager
@@ -335,6 +336,24 @@ class ResultManager:
         return {"status": "ok", "path": path}
 
     # ------------------------------------------------------------------ preconditions + manifest
+    def _delivery_evidence_passes(self, run_id: str) -> bool:
+        ev = self._load(run_id, "final_evidence.json") or {}
+        if (ev.get("reasons") or ev.get("canonical_containment") != "PASS"
+                or ev.get("verification") != "PASS" or ev.get("regression") != "PASS"
+                or ev.get("reviewer_verdict") != "pass"):
+            return False
+        if ev.get("baseline") == "PASS":
+            return True
+        baseline = self._load(run_id, "baseline_verification.json") or {}
+        post = self._load(run_id, "verification.json") or {}
+        return (ev.get("baseline") == "PREEXISTING_FAILURES" and baseline.get("passed") is False
+                and post.get("passed") is True)
+
+    def result_preconditions(self, run_id: str) -> Dict[str, Any]:
+        if self._load(run_id, "source_snapshot.json") is not None:
+            return self.tree_preconditions(run_id, cumulative=False)
+        return self.preconditions(run_id)
+
     def preconditions(self, run_id: str) -> Dict[str, Any]:
         blocks: List[str] = []
         run = self.sm.get_run(run_id)
@@ -346,8 +365,7 @@ class ResultManager:
         st = self.result_state(run_id).get("state")
         if st in (RESULT_APPLIED, RESULT_DISCARDED):
             blocks.append(f"Result already {st}")
-        ev = self._load(run_id, "final_evidence.json") or {}
-        if not ev or ev.get("reasons") or ev.get("canonical_containment") != "PASS" or ev.get("verification") != "PASS" or ev.get("baseline") != "PASS" or ev.get("regression") != "PASS" or ev.get("reviewer_verdict") != "pass":
+        if not self._delivery_evidence_passes(run_id):
             blocks.append("final_evidence is missing or not fully PASS")
         if not wt or not Path(wt).exists():
             blocks.append("Worktree missing")
@@ -480,7 +498,8 @@ class ResultManager:
                         dst.unlink()
                 except Exception as ex:
                     errors.append(f"{e['path']}: {ex}")
-            self._set_state(run_id, state, reason, rid, {"rollback_errors": errors})
+            if not pre.get("previous_run_applied") or errors:
+                self._set_state(run_id, state, reason, rid, {"rollback_errors": errors})
             self.sm.log_audit(run_id, applied_by, "RESULT_APPLY_ROLLED_BACK", json.dumps({"reason": reason[:500], "rollback_errors": errors, "request_id": rid}, ensure_ascii=False))
             return {"status": "rolled_back", "run_id": run_id, "reason": reason, "rollback_errors": errors, "result_state": state, "request_id": rid}
 
@@ -515,8 +534,16 @@ class ResultManager:
         v = self.config.get("verification", {}) or {}
         cmd = test_cmd if test_cmd is not None else v.get("test_command")
         verification = Verifier.verify(worktree_path=str(proj_root), build_cmd=v.get("build_command"), test_cmd=cmd, lint_cmd=v.get("lint_command"), git_checks=False)
-        self._save(run_id, "apply_verification.json", verification)
         post = self._load(run_id, "verification.json") or {}
+        evidence = self._load(run_id, "final_evidence.json") or {}
+        if not verification.get("passed") and evidence.get("baseline") == "PREEXISTING_FAILURES":
+            baseline = self._load(run_id, "baseline_verification.json")
+            unchanged = only_preexisting_failures(baseline, verification)
+            if unchanged and unchanged.issubset(post.get("preexisting_failures") or []):
+                verification["passed"] = True
+                verification["preexisting_failures"] = sorted(unchanged)
+                verification["summary"] += "; PRE-EXISTING FAILURES UNCHANGED"
+        self._save(run_id, "apply_verification.json", verification)
         expected = int((post.get("test_counts") or {}).get("passed", 0) or 0)
         got = int((verification.get("test_counts") or {}).get("passed", 0) or 0)
         if not verification.get("passed") or (expected > 0 and got < expected):
@@ -525,7 +552,8 @@ class ResultManager:
             if not m.get("deletion") and _sha(proj_root / m["path"]) != m["sha256"]:
                 return rollback(f"APPLY_VERIFY_FAILED: hash changed during verification: {m['path']}", RESULT_VERIFY_FAILED)
         self._set_state(run_id, RESULT_APPLIED, f"{len(manifest)} files applied and verified ({got} tests passed)", rid,
-                        {"files": [m["path"] for m in manifest], "verification": verification.get("test_counts")})
+                        {"files": [m["path"] for m in manifest], "verification": verification.get("test_counts"),
+                         "apply_scope": pre.get("apply_scope")})
         self.sm.log_audit(run_id, applied_by, "RESULT_APPLY_COMPLETED", json.dumps(
             {"run_id": run_id, "project": str(proj_root), "files": [m["path"] for m in manifest], "hashes": {m["path"]: m["sha256"] for m in manifest},
              "source_commit": pre["base_commit"], "applied_by": applied_by, "timestamp": datetime.utcnow().isoformat(),
@@ -581,17 +609,35 @@ class ResultManager:
             return {}
         return dict(zip(rels, r.stdout.split()))
 
-    def tree_manifest(self, run_id: str) -> Dict[str, Any]:
+    def tree_manifest(self, run_id: str, *, cumulative: bool = True) -> Dict[str, Any]:
         """Every file of the finished worktree that differs from the project, classified: A (new), M (changed by the
         AIs, untouched by the user), CONFLICT (both changed), and deletions the AIs made (reported, never applied).
         Comparisons use git's own blob ids, so CRLF conversion on Windows cannot fake a difference."""
         run = self.sm.get_run(run_id) or {}
         wt, proj = run.get("worktree_path") or "", run.get("project_path") or ""
         wt_root, proj_root = Path(wt).resolve(), Path(proj).resolve()
-        origin = self.origin_ref(run_id)
+        snapshot = self._load(run_id, "source_snapshot.json") or {}
+        origin = self.origin_ref(run_id) if cumulative else snapshot.get("base_ref")
+        if not cumulative:
+            rc, head, _ = _git(["rev-parse", "HEAD"], str(wt_root))
+            if not origin or rc or head.strip() != origin:
+                return {"ok": False, "blocks": ["Run worktree no longer matches its recorded base"],
+                        "manifest": [], "conflicts": [], "deleted": []}
+            post = self._load(run_id, "verification.json") or {}
+            if "git_status" in post:
+                recorded = {(c["type"], c["path"]) for c in self.parse_porcelain(post["git_status"] or "")
+                            if not self.is_generated_path(c["path"])}
+                current = {(c["type"], c["path"]) for c in self.change_set(str(wt_root))
+                           if not self.is_generated_path(c["path"])}
+                if not self._covers(recorded, current):
+                    return {"ok": False, "blocks": ["Run changes differ from verification evidence"],
+                            "manifest": [], "conflicts": [], "deleted": []}
         origin_blobs: Dict[str, str] = {}
         if origin:
             rc, out, _ = _git(["ls-tree", "-r", "-z", origin], str(proj_root))
+            if rc and not cumulative:
+                return {"ok": False, "blocks": ["Cannot read the run's recorded base tree"],
+                        "manifest": [], "conflicts": [], "deleted": []}
             if rc == 0:
                 for rec in out.split("\0"):
                     if "\t" in rec:
@@ -615,8 +661,12 @@ class ResultManager:
             if dst.exists() and (not SafetyPolicy.is_within_root(proj_root, dst) or (dst.parent.exists() and not SafetyPolicy.is_within_root(proj_root, dst.parent))):
                 conflicts.append({"path": rel, "reason": "target escapes project"}); continue
             candidates.append(rel)
+        dst_paths = [rel for rel in candidates if (proj_root / rel).is_file()]
         src_ids = self._git_blob_ids(wt_root, candidates)
-        dst_ids = self._git_blob_ids(proj_root, [rel for rel in candidates if (proj_root / rel).is_file()])
+        dst_ids = self._git_blob_ids(proj_root, dst_paths)
+        if not cumulative and (len(src_ids) != len(candidates) or len(dst_ids) != len(dst_paths)):
+            return {"ok": False, "blocks": ["Cannot compare run and project files"],
+                    "manifest": [], "conflicts": [], "deleted": []}
         manifest, unchanged = [], 0
         for rel in candidates:
             src, dst = wt_root / rel, proj_root / rel
@@ -630,6 +680,8 @@ class ResultManager:
             else:
                 if origin_blob is not None and src_blob == origin_blob:
                     unchanged += 1; continue                 # the user deleted it meanwhile; not resurrected
+                if not cumulative and origin_blob is not None:
+                    conflicts.append({"path": rel, "reason": "removed in the project since the run started"}); continue
                 kind = "A"
             data = src.read_bytes()
             manifest.append({"path": rel, "type": kind, "source": str(src), "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
@@ -639,7 +691,7 @@ class ResultManager:
         return {"ok": True, "blocks": [], "manifest": manifest, "conflicts": conflicts, "deleted": deleted,
                 "unchanged": unchanged, "origin_ref": origin}
 
-    def tree_preconditions(self, run_id: str, on_conflict: str = "block") -> Dict[str, Any]:
+    def tree_preconditions(self, run_id: str, on_conflict: str = "block", *, cumulative: bool = True) -> Dict[str, Any]:
         blocks: List[str] = []
         run = self.sm.get_run(run_id)
         if not run:
@@ -647,11 +699,12 @@ class ResultManager:
         proj, wt = run.get("project_path") or "", run.get("worktree_path") or ""
         if run["current_state"] != State.PASS:
             blocks.append(f"Run state is {run['current_state']}, not PASS")
-        st = self.result_state(run_id).get("state")
-        if st in (RESULT_APPLIED, RESULT_DISCARDED):
+        result = self.result_state(run_id)
+        st = result.get("state")
+        previous_run_applied = cumulative and st == RESULT_APPLIED and result.get("apply_scope") == "run"
+        if st in (RESULT_APPLIED, RESULT_DISCARDED) and not previous_run_applied:
             blocks.append(f"Result already {st}")
-        ev = self._load(run_id, "final_evidence.json") or {}
-        if not ev or ev.get("reasons") or ev.get("canonical_containment") != "PASS" or ev.get("verification") != "PASS" or ev.get("baseline") != "PASS" or ev.get("regression") != "PASS" or ev.get("reviewer_verdict") != "pass":
+        if not self._delivery_evidence_passes(run_id):
             blocks.append("final_evidence is missing or not fully PASS")
         if not wt or not Path(wt).exists():
             blocks.append("Worktree missing")
@@ -662,7 +715,7 @@ class ResultManager:
         with _APPLY_LOCK:
             if _project_key(proj) in _APPLY_INFLIGHT:
                 blocks.append("Another apply is in progress for this project")
-        tree = self.tree_manifest(run_id) if not blocks else {"manifest": [], "conflicts": [], "deleted": [], "blocks": [], "origin_ref": None}
+        tree = self.tree_manifest(run_id, cumulative=cumulative) if not blocks else {"manifest": [], "conflicts": [], "deleted": [], "blocks": [], "origin_ref": None}
         blocks += tree.get("blocks", [])
         if tree["conflicts"] and on_conflict == "block":
             blocks.append("Conflicts: " + ", ".join(c["path"] for c in tree["conflicts"][:12]) + (" ..." if len(tree["conflicts"]) > 12 else ""))
@@ -670,10 +723,11 @@ class ResultManager:
             blocks.append("Nothing to apply: the project already has every file of this result")
         return {"ok": not blocks, "blocks": blocks, "manifest": tree["manifest"], "conflicts": tree["conflicts"],
                 "deleted": tree.get("deleted", []), "unchanged": tree.get("unchanged", 0), "project_path": proj,
-                "worktree_path": wt, "base_commit": tree.get("origin_ref")}
+                "worktree_path": wt, "base_commit": tree.get("origin_ref"),
+                "apply_scope": "mission" if cumulative else "run", "previous_run_applied": previous_run_applied}
 
-    def apply_tree(self, run_id: str, request_id: str = "", applied_by: str = "HUMAN", on_conflict: str = "block") -> Dict[str, Any]:
-        """Apply a milestone's finished worktree to the project: backup, copy, re-verify in the project, roll back on
+    def apply_tree(self, run_id: str, request_id: str = "", applied_by: str = "HUMAN", on_conflict: str = "block", *, cumulative: bool = True) -> Dict[str, Any]:
+        """Apply a mission chain or one run to the project: backup, copy, re-verify in the project, roll back on
         any failure. on_conflict: 'block' refuses when the user changed a file the AIs also changed; 'skip' leaves
         those files alone and applies the rest. Deletions are never applied."""
         from core.bootstrap import configure_runtime
@@ -682,11 +736,12 @@ class ResultManager:
             if rid in _RECENT_APPLY_REQUESTS:
                 return {"status": "duplicate", "run_id": run_id, "request_id": rid}
             _RECENT_APPLY_REQUESTS[rid] = "inflight"
-        pre = self.tree_preconditions(run_id, on_conflict=on_conflict)
+        pre = self.tree_preconditions(run_id, on_conflict=on_conflict, cumulative=cumulative)
         if not pre["ok"]:
             with _APPLY_LOCK:
                 _RECENT_APPLY_REQUESTS[rid] = "blocked"
-            self._set_state(run_id, RESULT_BLOCKED, "; ".join(pre["blocks"]), rid)
+            if not pre.get("previous_run_applied"):
+                self._set_state(run_id, RESULT_BLOCKED, "; ".join(pre["blocks"]), rid)
             self.sm.log_audit(run_id, applied_by, "RESULT_APPLY_BLOCKED", json.dumps({"blocks": pre["blocks"], "request_id": rid}, ensure_ascii=False))
             return {"status": "blocked", "run_id": run_id, "blocks": pre["blocks"], "conflicts": pre["conflicts"], "request_id": rid}
         proj = pre["project_path"]; key = _project_key(proj)

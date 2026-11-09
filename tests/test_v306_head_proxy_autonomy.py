@@ -821,6 +821,10 @@ def test_only_minor_review_findings_pass_with_recorded_follow_ups(tmp_path, monk
     assert orch.apply_final_pass_gate(d2, ReviewResultSchema(verdict="changes_required", p1=["real bug"], summary="s"),
                                       logging.getLogger("t")) == State.FAIL
 
+    d3 = DecisionSchema(decision="PASS", rationale="code correct", next_steps=[])
+    minor = ReviewResultSchema(verdict="pass", p2=["No tests were deleted; remove the redundant comment."], summary="s")
+    assert orch.apply_final_pass_gate(d3, minor, logging.getLogger("t")) == State.PASS
+
 
 def test_empty_proposal_is_only_accepted_in_a_correction_round(tmp_path, monkeypatch):
     import sys

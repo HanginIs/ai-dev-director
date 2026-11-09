@@ -113,6 +113,43 @@ def test_milestone_chain_resolves_to_the_project_snapshot_it_started_from(tmp_pa
     kinds = {m["path"]: m["type"] for m in rm.tree_manifest(r2)["manifest"]}
     assert kinds == {"a.py": "M", "new.py": "A"}                                # both milestones are delivered
 
+    (proj / "a.py").write_text("a = 99\n", encoding="utf-8")
+    assert [c["path"] for c in rm.tree_preconditions(r2)["conflicts"]] == ["a.py"]
+    individual = rm.result_preconditions(r2)
+    assert individual["ok"] and [m["path"] for m in individual["manifest"]] == ["new.py"]
+    result = rm.apply_tree(r2, request_id="dlv3-individual", cumulative=False)
+    assert result["status"] == "applied" and result["files"] == ["new.py"]
+    assert (proj / "a.py").read_text(encoding="utf-8") == "a = 99\n"
+    assert rm.apply_tree(r2, request_id="dlv3-conflict")["status"] == "blocked"
+    assert rm.result_state(r2)["apply_scope"] == "run"
+    (proj / "a.py").write_text("a = 1\n", encoding="utf-8")
+    result = rm.apply_tree(r2, request_id="dlv3-mission")
+    assert result["status"] == "applied" and result["files"] == ["a.py"]
+
+
+@pytest.mark.parametrize("failure, expected", [("tests/test_old.py::test_old", "applied"),
+                                               ("tests/test_new.py::test_new", "rolled_back")])
+def test_apply_rechecks_the_exact_preexisting_failure(tmp_path, cleanup_runs, monkeypatch, failure, expected):
+    proj = project(tmp_path)
+    rid = "RUN-TEST-DLV-BASELINE"
+    cleanup_runs.append(rid)
+    wt = fake_run(proj, rid, snapshot(str(proj)))
+    (wt / "a.py").write_text("a = 2\n", encoding="utf-8")
+    rm = ResultManager()
+    evidence = rm._load(rid, "final_evidence.json")
+    evidence["baseline"] = "PREEXISTING_FAILURES"
+    rm._save(rid, "final_evidence.json", evidence)
+    old = "tests/test_old.py::test_old"
+    rm._save(rid, "baseline_verification.json", {"passed": False, "test": {"output": f"FAILED {old} - old"}})
+    rm._save(rid, "verification.json", {"passed": True, "preexisting_failures": [old], "test_counts": {"passed": 1}})
+    monkeypatch.setattr("core.result_manager.Verifier.verify", lambda **kwargs: {
+        "passed": False, "summary": "1 test failed", "test": {"output": f"FAILED {failure} - error"},
+        "test_counts": {"passed": 1},
+    })
+    result = rm.apply_tree(rid, request_id=f"dlv-baseline-{expected}")
+    assert result["status"] == expected
+    assert (proj / "a.py").read_text(encoding="utf-8") == ("a = 2\n" if expected == "applied" else "a = 1\n")
+
 
 def test_apply_tree_requires_full_pass_evidence(tmp_path, cleanup_runs):
     proj = project(tmp_path)

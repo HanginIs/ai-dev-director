@@ -1042,11 +1042,10 @@ class Orchestrator:
 
     def apply_final_pass_gate(self, decision: DecisionSchema, review_result: ReviewResultSchema, logger: logging.Logger) -> str:
         """Orchestrator-level strict PASS rules (identical for run and resume). Mutates decision; returns final state.
-        PASS survives only when: no P0, reviewer verdict == 'pass', no P1/deletion warning, HEAD and REVIEWER are
-        independent (not both Claude / same agent family)."""
+        Use the review verdict and severity fields. The verifier checks unauthorized deletions separately.
+        Provider independence is checked after the review gates."""
         reviewer_has_p0 = len(review_result.p0) > 0
         reviewer_has_p1 = len(review_result.p1) > 0
-        has_deletion_warning = any("remove" in s.lower() or "delet" in s.lower() for s in (review_result.p1 + review_result.p2))
         final_state = decision.decision
         if final_state != State.PASS:
             return final_state
@@ -1059,7 +1058,7 @@ class Orchestrator:
         # not a question for the user.
         blocked_state = State.FAIL if self._proxy() else State.HUMAN_REQUIRED
         if (self._proxy() and getattr(review_result, "verdict", None) != "pass" and not reviewer_has_p1
-                and not has_deletion_warning and review_result.p2):
+                and review_result.p2):
             # The reviewer itself rated everything left as minor: PASS, with the P2 items recorded as follow-ups.
             decision.rationale = (decision.rationale or "") + " [P2 FOLLOW-UPS: " + "; ".join(review_result.p2)[:1500] + "]"
             logger.info("[HEAD proxy] only P2 (minor) review findings remain: PASS with recorded follow-ups")
@@ -1068,7 +1067,7 @@ class Orchestrator:
             decision.decision = blocked_state
             decision.rationale = f"Overridden by Orchestrator: reviewer verdict {getattr(review_result, 'verdict', None)!r} is not 'pass' ({review_result.summary})"
             return blocked_state
-        if reviewer_has_p1 or has_deletion_warning:
+        if reviewer_has_p1:
             logger.warning(f"Overriding Head PASS to {blocked_state} due to existing behavior loss or P1 issue")
             decision.decision = blocked_state
             decision.rationale = f"Overridden by Orchestrator: Reviewer reported existing behavior loss or P1 concerns: {review_result.summary}"

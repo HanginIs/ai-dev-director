@@ -3022,7 +3022,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             run_id = q.get('run_id', [''])[0]
             try:
                 payload = _result_manager().summary(run_id, with_diffs=True) if run_id else {"error": "run_id required"}
-                payload["preconditions"] = _result_manager().preconditions(run_id) if run_id and payload.get("is_pass") else {"ok": False, "blocks": ["not a PASS run"]}
+                payload["preconditions"] = _result_manager().result_preconditions(run_id) if run_id and payload.get("is_pass") else {"ok": False, "blocks": ["not a PASS run"]}
                 payload["preconditions"].pop("manifest", None)
             except Exception as e:
                 payload = {"error": str(e)[:300], "run_id": run_id}
@@ -3131,7 +3131,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 try:
                     if self.path == '/result/apply':
                         snapshot_based = (rm.run_dir(run_id) / "source_snapshot.json").exists()
-                        result = (rm.apply_tree if snapshot_based else rm.apply)(run_id, request_id=request_id, applied_by="HUMAN")
+                        if snapshot_based:
+                            result = rm.apply_tree(run_id, request_id=request_id, applied_by="HUMAN", cumulative=False)
+                        else:
+                            result = rm.apply(run_id, request_id=request_id, applied_by="HUMAN")
                     elif self.path == '/result/discard':
                         result = rm.discard(run_id, request_id=request_id, by="HUMAN")
                     elif self.path == '/result/open_worktree':
