@@ -29,7 +29,7 @@ Xcode/Swift 5.9 이상, macOS 13 이상이 필요합니다. 결과는 `dist/AI-D
 `--build-only` 옵션은 앱을 실행하지 않고 빌드만 합니다.
 
 - 앱 안의 프로젝트 선택 버튼은 macOS 기본 폴더 선택 창을 엽니다.
-- 종료 시 서버를 백그라운드로 유지하거나 작업과 서버를 중지할 수 있습니다.
+- 종료 시 서버를 백그라운드로 유지하거나 작업과 서버를 중지할 수 있습니다. 콘솔의 **시스템 중지**로 서버가 이미 꺼졌다면 **작업 중지 후 종료**는 바로 앱을 닫습니다.
 - 실행 오류는 `data/desktop-server.log`에 기록됩니다.
 - 아이콘: AI-assisted artwork, 이 포크를 위해 생성. 원본은 `macos/Assets/AppIcon.png`.
 - 맥에서 앱 실행·콘솔 표시·폴더 선택 및 취소·서버 자동 시작을 수동 확인했습니다.
@@ -123,6 +123,15 @@ python director.py clean-worktrees -p D:/work/my_project --dry-run
 `config.yaml` 한 파일입니다. 역할별 공급자(`head/builder/reviewer`), 타임아웃, 안전 상한, 검증 명령,
 자율 모드(`autonomy`)와 프로필(`quick / standard / deep`), 프로젝트별 검증 명령(`projects`)을 둡니다.
 프로젝트별 검증 명령을 프로젝트 안이 아니라 여기에 두는 이유는 빌더가 그것을 약화시킬 수 없게 하기 위해서입니다.
+
+프로젝트별 명령이 없으면 프로젝트가 실제로 지원하는 테스트를 고릅니다. 파이썬 `tests/`가 있으면 pytest(프로젝트에
+자체 pytest 설정이 없으면 상위 폴더의 `pytest.ini`를 쓰지 않도록 `-c /dev/null --rootdir .`), `Package.swift`에 테스트
+대상이 있으면 `swift test`, `package.json`에 test 스크립트가 있으면 `npm test`입니다. 기본값 `python -m pytest tests/`가
+Swift·JS 프로젝트를 종료 코드 4로 매번 실패시키던 문제를 막습니다. `swift test` 결과의 XCTest·Swift Testing 통과 수도
+집계해 회귀를 판단합니다. `verification.timeout`(기본 120초)은 검증 명령 하나에 주는 시간입니다.
+
+절대 경로처럼 한 컴퓨터에만 맞는 설정은 깃에 올라가지 않는 `config.local.yaml`에 둡니다. `config.yaml`과 같은 구조이며
+그 위에 병합됩니다. 예: 테스트 대상이 없는 SwiftPM 앱의 점검 실행 파일, NumPy가 필요한 앱의 전용 가상환경 Python.
 
 `companion.json` 은 콘솔 포트와(선택) 허용 프로젝트 목록입니다. 콘솔은 항상 `127.0.0.1` 에만 바인딩되며,
 상태를 바꾸는 요청은 로컬 출처 검사와 브리지 토큰(`data/solomon-bridge.token`, 첫 실행 때 생성)을 요구합니다.
