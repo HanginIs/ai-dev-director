@@ -23,7 +23,7 @@ import plistlib,sys
 from pathlib import Path
 app,root=sys.argv[1:]
 with (Path(app)/'Contents/Info.plist').open('wb') as f:
- plistlib.dump({'CFBundlePackageType':'APPL','CFBundleExecutable':'DirectorApp','CFBundleIdentifier':'is.hanginis.ai-dev-director','CFBundleName':'AI Dev Director','CFBundleDisplayName':'AI Dev Director','CFBundleIconFile':'DirectorIcon.icns','CFBundleVersion':'3','CFBundleShortVersionString':'1.0','LSMinimumSystemVersion':'13.0','NSPrincipalClass':'NSApplication','NSHighResolutionCapable':True,'NSAppTransportSecurity':{'NSAllowsLocalNetworking':True},'DirectorRoot':root},f)
+ plistlib.dump({'CFBundlePackageType':'APPL','CFBundleExecutable':'DirectorApp','CFBundleIdentifier':'is.hanginis.ai-dev-director','CFBundleName':'AI Dev Director','CFBundleDisplayName':'AI Dev Director','CFBundleIconFile':'DirectorIcon.icns','CFBundleVersion':'4','CFBundleShortVersionString':'1.1','LSMinimumSystemVersion':'13.0','NSPrincipalClass':'NSApplication','NSHighResolutionCapable':True,'NSAppTransportSecurity':{'NSAllowsLocalNetworking':True},'DirectorRoot':root},f)
 PY
 # iCloud/Finder may attach metadata that invalidates an otherwise valid signature.
 xattr -d com.apple.FinderInfo "$APP" 2>/dev/null || true

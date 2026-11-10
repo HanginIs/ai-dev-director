@@ -25,6 +25,8 @@ final class DirectorApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let menu = NSMenu()
         let appItem = NSMenuItem(); menu.addItem(appItem)
         let appMenu = NSMenu(); appItem.submenu = appMenu
+        let about = appMenu.addItem(withTitle: "AI Dev Director 정보", action: #selector(showAbout), keyEquivalent: ""); about.target = self
+        appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "AI Dev Director 종료…", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let editItem = NSMenuItem(); menu.addItem(editItem)
         let edit = NSMenu(title: "편집"); editItem.submenu = edit
@@ -79,6 +81,21 @@ final class DirectorApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     func local(_ url: URL?) -> Bool {
         guard let url = url else { return false }
         return url.scheme == base.scheme && url.host == base.host && url.port == base.port
+    }
+    @objc func showAbout() {
+        let credits = """
+        HanginIs 수정판
+        원본: DAVZD ai-dev-director v3.1.8 (MIT License)
+
+        수정 사항: macOS 전용 앱(Swift · WKWebView), 프로젝트별 테스트 명령 자동 감지, \
+        앱 종료 처리 개선, 콘솔 정리(솔로몬 연동 · 방송 모드 제거, 원본 화면 → 스테이지 복귀)
+
+        github.com/HanginIs/ai-dev-director
+        """
+        let style = NSMutableParagraphStyle(); style.alignment = .center
+        let text = NSAttributedString(string: credits, attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor, .paragraphStyle: style])
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: text])
     }
     @objc func reconnect() {
         guard !starting else { return }

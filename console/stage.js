@@ -362,15 +362,10 @@ function setView(view){
   $('workshop').hidden=!work;$('tab-stage').classList.toggle('on',!work);$('tab-workshop').classList.toggle('on',work);
   $('tab-stage').setAttribute('aria-pressed',String(!work));$('tab-workshop').setAttribute('aria-pressed',String(work));
   if(work&&!frame.getAttribute('src'))frame.src='/classic';
-  if(work){$('attention').hidden=true;setBroadcast(false);}
-}
-function setBroadcast(on){
-  document.body.classList.toggle('broadcast',on);$('btn-broadcast').textContent=on?'방송 모드 끝내기':'방송 모드';
-  try{if(on&&!document.fullscreenElement)document.documentElement.requestFullscreen().catch(()=>{});else if(!on&&document.fullscreenElement)document.exitFullscreen().catch(()=>{});}catch(e){/* fullscreen is optional */}
+  if(work)$('attention').hidden=true;
 }
 function start(){
   Trinity.init($('trinity-canvas'),{onFrame});
-  if(params.get('broadcast')==='1'||attract)document.body.classList.add('broadcast');   // e.g. an OBS browser source: /?attract=1
   $('tab-stage').onclick=()=>setView('stage');$('tab-workshop').onclick=()=>setView('workshop');$('attention-go').onclick=()=>setView('workshop');
   $('top-project').onclick=async()=>{const b=$('top-project');if(b.disabled||replay)return;b.disabled=true;
     try{const r=await chooseProjectFolder();if(r)notice(r.ok?'작업 폴더를 바꿨습니다 · '+r.path:'선택할 수 없는 폴더입니다 · '+r.message);}
@@ -379,8 +374,6 @@ function start(){
   for(const label of document.querySelectorAll('.slot-label')){label.title='이 역할을 맡을 AI 바꾸기';label.onclick=e=>{e.stopPropagation();openRoleMenu(label);};}
   document.addEventListener('click',e=>{if(!e.target.closest('#role-menu'))$('role-menu').hidden=true;});
   $('btn-replay').onclick=startReplay;$('replay-stop').onclick=stopReplay;
-  $('btn-broadcast').onclick=()=>setBroadcast(!document.body.classList.contains('broadcast'));
-  document.addEventListener('fullscreenchange',()=>{if(!document.fullscreenElement&&document.body.classList.contains('broadcast'))setBroadcast(false);});
   for(const b of $('win-tabs').children)b.onclick=()=>{win=b.dataset.win;winAuto=false;repaint();};
   $('chat-peek').onclick=()=>{const log=$('chat-log');log.hidden=!log.hidden;$('chat-peek').setAttribute('aria-expanded',String(!log.hidden));if(!log.hidden)log.scrollTop=log.scrollHeight;};
   $('chat-form').addEventListener('submit',e=>{e.preventDefault();send($('chat-text').value);});
@@ -389,7 +382,6 @@ function start(){
   document.addEventListener('keydown',e=>{
     if(e.key==='Escape'){$('chat-log').hidden=true;$('role-menu').hidden=true;if(replay)stopReplay();return;}
     if(e.target.closest('textarea,input,[contenteditable]')||e.ctrlKey||e.metaKey||e.altKey||document.body.dataset.view!=='stage')return;
-    if(e.key==='b'||e.key==='B'||e.key==='ㅠ')setBroadcast(!document.body.classList.contains('broadcast'));
     if(e.key==='r'||e.key==='R'||e.key==='ㄱ')startReplay();});
   setInterval(()=>{const d=new Date();$('top-clock').textContent=[d.getHours(),d.getMinutes(),d.getSeconds()].map(n=>String(n).padStart(2,'0')).join(':');if(!replay)tickTimer();},1000);
   pollActivity();pollStatus();pollChat();pollRoles();setInterval(pollRoles,8000);

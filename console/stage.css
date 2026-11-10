@@ -31,8 +31,6 @@ button{font:inherit;color:inherit;cursor:pointer}
 button.meta-chip{height:30px;padding:0 12px;border-radius:9px;border:1px solid var(--line);background:rgba(255,255,255,.04);transition:.2s}
 button.meta-chip:hover{color:var(--text);border-color:var(--line2);background:rgba(255,255,255,.09)}
 button.meta-chip::after{content:" ▾";opacity:.6}
-body.broadcast button.meta-chip{border-color:transparent;background:transparent;pointer-events:none}
-body.broadcast button.meta-chip::after{content:""}
 .meta-chip{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
 .meta-clock{font:500 14px var(--num);letter-spacing:.08em;color:var(--muted);font-variant-numeric:tabular-nums}
 .live-chip{display:inline-flex;align-items:center;gap:7px;padding:4px 11px 4px 9px;border-radius:99px;border:1px solid var(--line2);font:700 10.5px var(--num);letter-spacing:.2em;color:var(--muted)}
@@ -141,8 +139,8 @@ body.ready .slot-label{opacity:1}
 body.ready .slot-label{pointer-events:auto;cursor:pointer}
 .slot-role::after{content:" ▾";opacity:.55}
 .slot-label:hover .slot-role{color:var(--text)}
-body.broadcast .slot-label,body.replaying .slot-label{pointer-events:none;cursor:default}
-body.broadcast .slot-role::after,body.replaying .slot-role::after{content:""}
+body.replaying .slot-label{pointer-events:none;cursor:default}
+body.replaying .slot-role::after{content:""}
 #role-menu{position:absolute;left:0;top:0;z-index:3;min-width:210px;padding:8px;border-radius:14px;background:rgba(7,10,19,.95);border:1px solid var(--line2);box-shadow:0 24px 60px #000b;pointer-events:auto;display:flex;flex-direction:column;gap:4px}
 #role-menu[hidden]{display:none}
 #role-menu p{margin:2px 6px 6px;font-size:11.5px;color:var(--muted)}
@@ -226,20 +224,10 @@ body.replaying #top-project{display:none}
 #workshop{position:fixed;z-index:3;inset:60px 0 0 0;background:#10151d}
 #workshop[hidden]{display:none}
 #workshop iframe{display:block;width:100%;height:100%;border:0}
-body[data-view="workshop"] #stage,body[data-view="workshop"] #composer{display:none}
+body[data-view="workshop"] #stage,body[data-view="workshop"] #composer,body[data-view="workshop"] #fork-credit{display:none}
+#fork-credit{position:fixed;z-index:4;left:0;right:0;bottom:2px;text-align:center;color:var(--faint);font-size:10px;line-height:1.3;pointer-events:none}
 #shell-error{position:fixed;z-index:9;bottom:16px;right:20px;background:#563921;color:#fff;padding:12px 14px;border-radius:10px;font-size:13px}
 #shell-error[hidden]{display:none}
-
-/* ---------- broadcast mode: the stage is the show */
-body.broadcast #composer,body.broadcast .top-actions button:not(#btn-broadcast),body.broadcast #attention{display:none}
-body.broadcast #stage{inset:64px 22px 22px 22px;grid-template-columns:300px minmax(0,1fr) 320px}
-body.broadcast #panel-now,body.broadcast #panel-work{background:rgba(9,13,24,.4);align-self:start;max-height:100%}
-body.broadcast #panel-now .feed,body.broadcast .footnote{display:none}
-body.broadcast #caption{display:block}
-body.broadcast #btn-broadcast{opacity:.35}
-body.broadcast #btn-broadcast:hover{opacity:1}
-body.broadcast #phase-box{display:none}
-body.broadcast .slot-name{font-size:25px}
 
 /* ---------- responsive */
 @media(max-width:1180px){

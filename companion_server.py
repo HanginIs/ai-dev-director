@@ -92,6 +92,14 @@ def project_registry() -> list:
     return sorted(seen.values(), key=lambda e: (e['last_mission'] is None, -(e['missions']), e['name']))
 
 
+CLASSIC_BACK_TO_STAGE = (
+    '<a id="back-to-stage" href="/" title="스테이지 화면으로 돌아가기" style="position:fixed;top:12px;right:16px;'
+    'z-index:9999;padding:7px 14px;border-radius:8px;background:#27476b;color:#d9ebff;font:600 13px -apple-system,'
+    'BlinkMacSystemFont,sans-serif;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.35)">← 스테이지</a>'
+    '<script>if(window.top!==window.self){document.getElementById("back-to-stage").remove();}</script>'
+)
+
+
 class CompanionHandler(d.DashboardHandler):
     def do_GET(self):
         if not d.is_request_origin_allowed(self.headers, self.server.server_address[1])[0]:
@@ -117,7 +125,16 @@ class CompanionHandler(d.DashboardHandler):
             self.send_header('Content-Security-Policy', "default-src 'self'; frame-ancestors 'none'; base-uri 'none'")
             self.end_headers(); self.wfile.write(body); return
         if path == '/classic':
-            self.path = '/'
+            # The original dashboard. Opened full-window (원본 화면 ↗) it gets a way back to the stage console;
+            # inside the workshop iframe the button removes itself.
+            body = d.render_html().replace('</body>', CLASSIC_BACK_TO_STAGE + '</body>', 1).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         elif path == '/ops/state':
             report = ROOT / 'data' / 'cli_diagnostics.json'
             return self._send_json({'csrf': self.server.bridge_token,
