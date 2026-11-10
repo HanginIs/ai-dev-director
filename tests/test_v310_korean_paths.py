@@ -60,3 +60,20 @@ def test_snapshot_carries_cjs_tests_data_files_images_and_korean_names(tmp_path)
                             capture_output=True, text=True, encoding="utf-8").stdout.split()
     assert {"tests/missions.test.cjs", "data/missions.json", "docs/계획서.md", "assets/dog.png"} <= set(listed)
     assert "data/secret_token.json" not in listed
+
+
+def test_snapshot_carries_macos_command_scripts_and_extensionless_scripts(tmp_path):
+    # A folder whose only tool was a '.command' script reached the agents without it.
+    from core.bootstrap import snapshot
+    wt = repo(tmp_path)
+    for rel, body in (("CleanMyMac-Safe-Manager.command", "#!/bin/zsh\necho ok\n"), ("Makefile", "all:\n"),
+                      ("bin/run", "#!/usr/bin/env python3\nprint(1)\n"), ("notes/blob", "not a script"),
+                      ("build/App.spec", "a = 1"), ("model.bin", "binary")):
+        (wt / rel).parent.mkdir(parents=True, exist_ok=True)
+        (wt / rel).write_text(body, encoding="utf-8")
+    commit = snapshot(str(wt))
+    listed = subprocess.run(["git", "-c", "core.quotepath=false", "ls-tree", "-r", "--name-only", commit], cwd=wt,
+                            capture_output=True, text=True, encoding="utf-8").stdout.split()
+    assert {"CleanMyMac-Safe-Manager.command", "Makefile", "bin/run", "build/App.spec"} <= set(listed)
+    assert "notes/blob" not in listed and "model.bin" not in listed
+

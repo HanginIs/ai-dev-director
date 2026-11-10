@@ -10,7 +10,20 @@ SOURCE_ROOT = Path(__file__).resolve().parents[1]
 SUFFIXES = {'.py', '.pyi', '.md', '.txt', '.toml', '.yaml', '.yml', '.json', '.js', '.cjs', '.mjs', '.ts', '.tsx', '.jsx', '.vue',
             '.html', '.css', '.scss', '.sql', '.rs', '.go', '.java', '.kt', '.swift', '.c', '.h', '.cpp', '.cs', '.gradle', '.xml',
             '.ini', '.cfg', '.csv', '.bat', '.cmd', '.sh', '.ps1', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.ico',
-            '.mq5', '.mqh', '.mq4', '.set'}
+            '.mq5', '.mqh', '.mq4', '.set',
+            # macOS scripts and app build files: a folder holding only a '.command' tool was snapshotted empty.
+            '.command', '.zsh', '.bash', '.fish', '.applescript', '.plist', '.entitlements', '.spec'}
+# Files that are normally extensionless. Any other extensionless file is kept only when it is a script (#!).
+NAMES = {'Makefile', 'Dockerfile', 'Procfile', 'Brewfile', 'Gemfile'}
+
+def carried(target):
+    """Whether an untracked file goes into the private snapshot handed to the next milestone."""
+    if target.stat().st_size > 2_000_000: return False
+    if target.suffix.lower() in SUFFIXES or target.name in NAMES: return True
+    if target.suffix: return False
+    try:
+        with open(target, 'rb') as handle: return handle.read(2) == b'#!'
+    except OSError: return False
 
 def git(root, *args, env=None):
     p = subprocess.run(['git', *args], cwd=str(root), env=env, input='', capture_output=True,
@@ -55,7 +68,7 @@ def snapshot(root):
         target = root / p
         if not target.exists(): continue
         if target.is_symlink() or root not in target.resolve().parents: raise ValueError('Snapshot escapes project: ' + rel)
-        if p.suffix.lower() in SUFFIXES and target.stat().st_size <= 2_000_000: safe.append(rel)
+        if carried(target): safe.append(rel)
     with tempfile.TemporaryDirectory(prefix='director-index-') as tmp:
         env = identity(); env['GIT_INDEX_FILE'] = str(Path(tmp) / 'index')
         git(root, 'read-tree', head, env=env)
