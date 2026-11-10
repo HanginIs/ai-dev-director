@@ -92,12 +92,21 @@ def project_registry() -> list:
     return sorted(seen.values(), key=lambda e: (e['last_mission'] is None, -(e['missions']), e['name']))
 
 
+# Sits at the start of the classic header row, so it never covers the header's own buttons (상태 새로고침 etc.).
 CLASSIC_BACK_TO_STAGE = (
-    '<a id="back-to-stage" href="/" title="스테이지 화면으로 돌아가기" style="position:fixed;top:12px;right:16px;'
-    'z-index:9999;padding:7px 14px;border-radius:8px;background:#27476b;color:#d9ebff;font:600 13px -apple-system,'
-    'BlinkMacSystemFont,sans-serif;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.35)">← 스테이지</a>'
+    '<a id="back-to-stage" href="/" title="스테이지 화면으로 돌아가기" style="flex:none;padding:4px 10px;'
+    'border-radius:6px;background:#27476b;color:#d9ebff;font:600 12px -apple-system,BlinkMacSystemFont,sans-serif;'
+    'text-decoration:none">← 스테이지</a>'
     '<script>if(window.top!==window.self){document.getElementById("back-to-stage").remove();}</script>'
 )
+
+
+def classic_page(html: str) -> str:
+    """The classic dashboard with the back-to-stage link at the head of its header row."""
+    marker = '<div id="hdr">'
+    if marker in html:
+        return html.replace(marker, marker + CLASSIC_BACK_TO_STAGE, 1)
+    return html.replace('</body>', CLASSIC_BACK_TO_STAGE + '</body>', 1)
 
 
 class CompanionHandler(d.DashboardHandler):
@@ -127,7 +136,7 @@ class CompanionHandler(d.DashboardHandler):
         if path == '/classic':
             # The original dashboard. Opened full-window (원본 화면 ↗) it gets a way back to the stage console;
             # inside the workshop iframe the button removes itself.
-            body = d.render_html().replace('</body>', CLASSIC_BACK_TO_STAGE + '</body>', 1).encode('utf-8')
+            body = classic_page(d.render_html()).encode('utf-8')
             self.send_response(200)
             self.send_header('Content-type', 'text/html; charset=utf-8')
             self.send_header('Cache-Control', 'no-store')

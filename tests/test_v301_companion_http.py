@@ -62,7 +62,9 @@ def test_classic_view_offers_a_way_back_to_the_stage(http_server):
     assert code == 200 and 'id="main"' in text            # still the original dashboard the workshop embeds
     assert 'id="back-to-stage" href="/"' in text           # full-window view links back to the stage
     assert 'window.top!==window.self' in text              # and hides that link inside the workshop iframe
-    assert text.index('id="back-to-stage"') < text.rindex('</body>')
+    # inside the header row, ahead of its buttons, instead of floating over 상태 새로고침
+    assert text.index('<div id="hdr">') < text.index('id="back-to-stage"') < text.index('id="refresh-btn"')
+    assert 'position:fixed' not in text[text.index('id="back-to-stage"'):text.index('</a>', text.index('id="back-to-stage"'))]
 
 
 def test_console_has_no_solomon_office_link_or_inbox():
