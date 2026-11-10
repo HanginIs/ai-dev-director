@@ -10,7 +10,7 @@ function setup(){
  const css=doc.createElement('link');css.rel='stylesheet';css.href='/console.css';doc.head.append(css);
  const panel=el('section','','mission-control');panel.id='mission-control';
  const heading=el('div','','mission-heading'),identity=el('div');identity.append(el('span','ANTIGRAVITY / DEVELOPMENT WORKSPACE','mission-kicker'),el('h1','세 AI와 함께 만드는 작업실'));
- const navigation=el('div','','workspace-links');for(const [name,url] of [['솔로몬 집무실','http://127.0.0.1:8710'],['원본 화면','/classic']]){const a=el('a',name+' ↗');a.href=url;a.target='_top';navigation.append(a);}heading.append(identity,navigation);
+ const navigation=el('div','','workspace-links');for(const [name,url] of [['원본 화면','/classic']]){const a=el('a',name+' ↗');a.href=url;a.target='_top';navigation.append(a);}heading.append(identity,navigation);
  const summary=el('div','','mission-summary'),state=el('div','','mission-state');state.append(el('span','현재 작업','mission-kicker'),el('strong','연결 중'));state.lastChild.id='mission-state';
  const next=el('div','','mission-next');next.append(el('span','다음 행동','mission-kicker'),el('p','실행 기록을 읽고 있습니다.'));next.lastChild.id='mission-next';summary.append(state,next);
  const meta=el('div','','mission-meta');for(const id of ['mission-project','mission-updated','mission-tests']){const n=el('span','—');n.id=id;meta.append(n);}
@@ -158,7 +158,7 @@ function setupFolderPicker(){
 function showVeil(title,detail){
  let veil=document.getElementById('shutdown-veil');
  if(!veil){veil=document.createElement('div');veil.id='shutdown-veil';document.body.append(veil);}
- veil.innerHTML='<div><strong></strong><p class="veil-detail"></p><p>다시 켜려면 솔로몬 집무실 상단의 <code>AI DEV 켜기</code> 버튼, 또는 <code>start-companion.ps1</code>을 실행하세요.</p></div>';
+ veil.innerHTML='<div><strong></strong><p class="veil-detail"></p><p>다시 켜려면 AI Dev Director 앱을 다시 열거나 메뉴의 <code>보기 → 콘솔 다시 연결</code>을 선택하세요.</p></div>';
  veil.querySelector('strong').textContent=title;veil.querySelector('.veil-detail').textContent=detail||'';
  document.body.classList.add('offline');
 }
