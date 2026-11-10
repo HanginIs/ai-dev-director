@@ -89,23 +89,84 @@ def test_existing_python_source_parses():
         'commit', '-m', 'Initial syntax test, product tests still required')
     return rel
 
+DEFAULT_TEST_COMMAND = 'python -m pytest tests/'
+
+
+def _read(path):
+    try:
+        return path.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return ''
+
+
+def _has_pytest_config(root):
+    """True when the project configures pytest itself. Without one, pytest walks up and adopts an unrelated
+    parent pytest.ini as rootdir/config (e.g. ~/Work/src/pytest.ini for every app below it)."""
+    if (root / 'pytest.ini').is_file() or (root / '.pytest.ini').is_file():
+        return True
+    return ('[tool.pytest' in _read(root / 'pyproject.toml') or '[pytest]' in _read(root / 'tox.ini')
+            or '[tool:pytest]' in _read(root / 'setup.cfg'))
+
+
+def _has_python_tests(root):
+    tests = root / 'tests'          # on a case-insensitive disk this also matches a Swift 'Tests' folder
+    if not tests.is_dir():
+        return False
+    try:
+        return any(tests.rglob('test_*.py')) or any(tests.rglob('*_test.py'))
+    except OSError:
+        return False
+
+
+def detect_test_command(project):
+    """The test command a project actually supports, used when no per-project command is configured:
+    pytest for a Python tests/ folder, `swift test` for a SwiftPM package with test targets, `npm test` for a
+    package.json with a real test script. None means nothing was detected (the default command stays)."""
+    root = Path(project)
+    if _has_python_tests(root):
+        command = ['python', '-m', 'pytest', 'tests/']
+        if not _has_pytest_config(root):
+            command += ['-c', os.devnull, '--rootdir', '.']
+        return command
+    if '.testTarget(' in _read(root / 'Package.swift'):
+        return ['swift', 'test']
+    package = root / 'package.json'
+    if package.is_file():
+        import json
+        try:
+            script = ((json.loads(_read(package)) or {}).get('scripts') or {}).get('test') or ''
+        except (ValueError, AttributeError):
+            script = ''
+        if script and 'no test specified' not in script:
+            return ['npm', 'test']
+    return None
+
+
 def configure_runtime(config, project):
     import copy
     updated = copy.deepcopy(config)
     # Per-project verification lives in the Director's own config (never in the project, where a Builder could
     # weaken it), keyed by the project path.
+    overridden = False
     for key, override in (updated.get('projects') or {}).items():
         try:
             same = Path(key).resolve() == Path(project).resolve()
         except (OSError, ValueError):
             same = False
         if same and isinstance(override, dict):
-            updated.setdefault('verification', {}).update(override.get('verification') or {})
+            verification = override.get('verification') or {}
+            updated.setdefault('verification', {}).update(verification)
+            overridden = overridden or 'test_command' in verification
     command = updated.get('verification', {}).get('test_command')
-    if command == 'python -m pytest tests/':
+    if command == DEFAULT_TEST_COMMAND and not overridden:
+        detected = detect_test_command(project)
+        if detected:
+            updated['verification']['test_command'] = command = detected
+    if command == DEFAULT_TEST_COMMAND or (not overridden and isinstance(command, list) and command[:1] == ['python']):
         for rel in ('.venv/Scripts/python.exe', '.venv/bin/python'):
             exe = Path(project) / rel
             if exe.is_file():
-                updated['verification']['test_command'] = [str(exe.resolve()), '-m', 'pytest', 'tests/']
+                rest = command[1:] if isinstance(command, list) else ['-m', 'pytest', 'tests/']
+                updated['verification']['test_command'] = [str(exe.resolve()), *rest]
                 break
     return updated

@@ -38,14 +38,19 @@ safety:
 
 verification:
   build_command: null
+  # Default only. Without a per-project command the Director detects what the project supports: pytest for a
+  # Python tests/ folder (ignoring an unrelated parent pytest.ini), `swift test` for a SwiftPM package with test
+  # targets, `npm test` for a package.json test script.
   test_command: "python -m pytest tests/"
   lint_command: null
+  timeout: 120             # seconds per verification command
 
 bootstrap:
   enabled: true
 
 # Per-project verification (kept here, never inside the project, so a Builder cannot weaken it).
-# Keys are absolute project roots. Example:
+# Machine-specific entries belong in the git-ignored config.local.yaml next to this file (same structure,
+# deep-merged over this one). Keys are absolute project roots. Example:
 # projects:
 #   "D:/work/my_service":
 #     verification:

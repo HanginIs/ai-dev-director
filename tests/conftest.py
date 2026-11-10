@@ -127,8 +127,8 @@ def strict_policy_unless_head_proxy(request, monkeypatch):
     import dashboard_server
     real = director.load_config
 
-    def strict_config():
-        cfg = real()
+    def strict_config(*args, **kwargs):
+        cfg = real(*args, **kwargs)
         cfg.setdefault("autonomy", {})["head_proxy"] = False
         return cfg
     monkeypatch.setattr(director, "load_config", strict_config)

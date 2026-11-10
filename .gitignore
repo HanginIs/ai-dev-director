@@ -11,6 +11,7 @@ research/
 
 # local overrides
 companion.local.json
+config.local.yaml
 *.log
 *.err
 *.token

@@ -9,12 +9,30 @@ import click
 from core.orchestrator import Orchestrator
 from core.state_machine import StateMachine, State
 
-def load_config() -> dict:
-    cfg_path = Path(__file__).resolve().parent / "config.yaml"
+def _merge_config(base: dict, extra: dict) -> dict:
+    """Deep-merge `extra` into `base` (nested dicts merge, everything else replaces)."""
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge_config(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def load_config(root: Optional[Path] = None) -> dict:
+    root = Path(root) if root else Path(__file__).resolve().parent
+    cfg_path = root / "config.yaml"
     if cfg_path.exists():
         with open(cfg_path, "r", encoding="utf-8") as f:
-            from core.role_settings import apply
-            return apply(yaml.safe_load(f) or {})
+            config = yaml.safe_load(f) or {}
+        # Machine-specific settings (per-project verification commands, timeouts, ...) live in an optional,
+        # git-ignored config.local.yaml so absolute paths of one computer never enter the shared config.
+        local = root / "config.local.yaml"
+        if local.exists():
+            with open(local, "r", encoding="utf-8") as f:
+                _merge_config(config, yaml.safe_load(f) or {})
+        from core.role_settings import apply
+        return apply(config)
     return {}
 
 @click.group()

@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, Callable
 from core.state_machine import StateMachine, State, TERMINAL_STATES
 from core.git_manager import GitManager
 from core.safety import SafetyPolicy, ScopeViolationError
-from core.verifier import Verifier
+from core.verifier import Verifier, verification_timeout
 from core.provider_manager import ProviderManager, ProviderStatus, FailoverMode, ErrorCategory
 from core import autopilot
 from agents.head import BaseHead
@@ -388,6 +388,11 @@ class Orchestrator:
         v = self.config.get("verification", {}) or {}
         return v.get("build_command"), v.get("test_command"), v.get("lint_command")
 
+    def _verification_timeout(self) -> float:
+        """Seconds each verification command may run (verification.timeout, default 120): a cold `swift test`
+        in a fresh worktree compiles the whole package first."""
+        return verification_timeout(self.config)
+
     def prepare_order_for_execution(self, run_id: str, order: OrderSchema, logger: logging.Logger,
                                     provenance_records: list, worktree_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Global safety caps (min(order, global)) + fail-closed path validation. With a worktree the paths must
@@ -655,7 +660,8 @@ class Orchestrator:
         product's runtime output, not Builder changes, and must not later read as out-of-scope Builder edits."""
         build_cmd, test_cmd, lint_cmd = self._verification_cmds()
         before = self._dirty_state(worktree_path) if self._proxy() else None
-        result = Verifier.verify(worktree_path=worktree_path, build_cmd=build_cmd, test_cmd=test_cmd, lint_cmd=lint_cmd)
+        result = Verifier.verify(worktree_path=worktree_path, build_cmd=build_cmd, test_cmd=test_cmd, lint_cmd=lint_cmd,
+                                 timeout=self._verification_timeout())
         if before is not None:
             after = self._dirty_state(worktree_path)
             changed = {p for p, sig in after.items() if before.get(p, "absent") != sig and not SafetyPolicy.is_runtime_artifact(p)}

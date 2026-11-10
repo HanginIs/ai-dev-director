@@ -22,7 +22,7 @@ from core.autopilot import only_preexisting_failures
 from core.state_machine import StateMachine, State
 from core.safety import SafetyPolicy
 from core.git_manager import GitManager
-from core.verifier import Verifier
+from core.verifier import Verifier, verification_timeout
 
 RESULT_READY = "READY"
 RESULT_APPLIED = "APPLIED"
@@ -533,7 +533,8 @@ class ResultManager:
         # verify in the main project with the same verifier
         v = self.config.get("verification", {}) or {}
         cmd = test_cmd if test_cmd is not None else v.get("test_command")
-        verification = Verifier.verify(worktree_path=str(proj_root), build_cmd=v.get("build_command"), test_cmd=cmd, lint_cmd=v.get("lint_command"), git_checks=False)
+        verification = Verifier.verify(worktree_path=str(proj_root), build_cmd=v.get("build_command"), test_cmd=cmd, lint_cmd=v.get("lint_command"), git_checks=False,
+                                       timeout=verification_timeout(self.config))
         post = self._load(run_id, "verification.json") or {}
         evidence = self._load(run_id, "final_evidence.json") or {}
         if not verification.get("passed") and evidence.get("baseline") == "PREEXISTING_FAILURES":

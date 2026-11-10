@@ -8,6 +8,18 @@ from core.git_manager import GitManager
 from core.process_runner import ProcessTreeRunner, ProcessResult
 from core.env_utils import get_sanitized_env
 
+DEFAULT_VERIFICATION_TIMEOUT = 120.0
+
+
+def verification_timeout(config: Optional[Dict[str, Any]]) -> float:
+    """verification.timeout from the Director config, in seconds (invalid or missing -> 120)."""
+    try:
+        value = float(((config or {}).get("verification") or {}).get("timeout") or DEFAULT_VERIFICATION_TIMEOUT)
+    except (TypeError, ValueError):
+        return DEFAULT_VERIFICATION_TIMEOUT
+    return value if value > 0 else DEFAULT_VERIFICATION_TIMEOUT
+
+
 class Verifier:
     """Orchestrator-driven verification executing build, test, and git checks."""
 
@@ -167,4 +179,29 @@ class Verifier:
         if counts["total"] == 0:
             counts["total"] = counts["passed"] + counts["failed"]
 
+        if counts["total"] == 0:
+            counts = Verifier._parse_swift_test_counts(output) or counts
+
         return counts
+
+    @staticmethod
+    def _parse_swift_test_counts(output: str) -> Optional[Dict[str, int]]:
+        """`swift test` output: XCTest prints 'Executed N tests, with M failures' per suite (the last line is the
+        'All tests' total); Swift Testing prints 'Test run with N tests ... passed|failed ... with K issues'."""
+        import re
+        total = failed = 0
+        found = False
+        xctest = re.findall(r"Executed\s+(\d+)\s+tests?,\s+with\s+(\d+)\s+failures?", output)
+        if xctest:
+            found = True
+            total, failed = int(xctest[-1][0]), int(xctest[-1][1])
+        for n, outcome, issues in re.findall(
+                r"Test run with\s+(\d+)\s+tests?\b[^\n]*?\b(passed|failed)\b(?:[^\n]*?with\s+(\d+)\s+issues?)?", output):
+            found = True
+            n = int(n)
+            total += n
+            if outcome == "failed":
+                failed += min(n, int(issues or 1))
+        if not found:
+            return None
+        return {"passed": max(total - failed, 0), "failed": failed, "total": total}
