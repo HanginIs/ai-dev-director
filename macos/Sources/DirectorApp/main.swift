@@ -181,24 +181,35 @@ final class DirectorApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         stopServer()
         return .terminateLater
     }
-    func post(_ path: String, completion: @escaping (Bool) -> Void) {
-        guard let token = try? String(contentsOf: root.appendingPathComponent("data/solomon-bridge.token"), encoding: .utf8) else { completion(false); return }
+    enum PostResult { case ok, unreachable, failed }
+    /// .unreachable: nothing is listening on the port (the server is already down, e.g. stopped with the console's
+    /// 시스템 중지 button), as opposed to a server that answered with an error or did not answer in time.
+    func post(_ path: String, completion: @escaping (PostResult) -> Void) {
+        guard let token = try? String(contentsOf: root.appendingPathComponent("data/solomon-bridge.token"), encoding: .utf8) else { completion(.failed); return }
         var request = URLRequest(url: base.appendingPathComponent(path)); request.httpMethod = "POST"; request.timeoutInterval = 20
         request.setValue(token.trimmingCharacters(in: .whitespacesAndNewlines), forHTTPHeaderField: "X-Solomon-Bridge")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = Data("{}".utf8)
-        URLSession.shared.dataTask(with: request) { _, response, _ in
-            completion((response as? HTTPURLResponse)?.statusCode == 200)
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            if (response as? HTTPURLResponse)?.statusCode == 200 { completion(.ok); return }
+            let down: [URLError.Code] = [.cannotConnectToHost, .networkConnectionLost, .cannotFindHost, .notConnectedToInternet]
+            if response == nil, let code = (error as? URLError)?.code, down.contains(code) { completion(.unreachable); return }
+            completion(.failed)
         }.resume()
     }
     func stopServer() {
-        post("ops/missions/stop") { ok in
-            guard ok else { DispatchQueue.main.async { self.fail("작업 중지를 확인하지 못했습니다. 콘솔에서 상태를 확인해 주세요."); NSApp.reply(toApplicationShouldTerminate: false) }; return }
+        post("ops/missions/stop") { result in
+            if result == .unreachable { DispatchQueue.main.async { self.finishQuit() }; return }     // already stopped
+            guard result == .ok else { DispatchQueue.main.async { self.fail("작업 중지를 확인하지 못했습니다. 콘솔에서 상태를 확인해 주세요."); NSApp.reply(toApplicationShouldTerminate: false) }; return }
             self.post("ops/shutdown") { stopped in DispatchQueue.main.async {
-                self.closing = stopped
-                if !stopped { self.fail("서버 종료를 확인하지 못했습니다.") }
-                NSApp.reply(toApplicationShouldTerminate: stopped)
+                // the server may close the connection while shutting down: unreachable counts as stopped
+                if stopped == .failed { self.fail("서버 종료를 확인하지 못했습니다."); NSApp.reply(toApplicationShouldTerminate: false); return }
+                self.finishQuit()
             }}
         }
+    }
+    func finishQuit() {
+        closing = true
+        NSApp.reply(toApplicationShouldTerminate: true)
     }
 }
 let app = NSApplication.shared
