@@ -138,6 +138,13 @@ final class DirectorApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         environment["PYTHONUNBUFFERED"] = "1"
         process.environment = environment
         let logs = root.appendingPathComponent("data/desktop-server.log")
+        // Keep one previous log. The file is appended to on every launch and had grown to 22 MB.
+        if let size = (try? FileManager.default.attributesOfItem(atPath: logs.path))?[.size] as? NSNumber,
+           size.intValue > 5_000_000 {
+            let previous = root.appendingPathComponent("data/desktop-server.log.1")
+            try? FileManager.default.removeItem(at: previous)
+            try? FileManager.default.moveItem(at: logs, to: previous)
+        }
         if !FileManager.default.fileExists(atPath: logs.path) { FileManager.default.createFile(atPath: logs.path, contents: nil) }
         logHandle = try FileHandle(forWritingTo: logs); try logHandle?.seekToEnd()
         process.standardOutput = logHandle; process.standardError = logHandle; process.standardInput = FileHandle.nullDevice

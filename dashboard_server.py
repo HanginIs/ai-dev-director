@@ -2958,6 +2958,15 @@ def render_html():
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
+    def log_request(self, code='-', size='-'):
+        """The console polls status, chat, activity and roles every few seconds. Logging each successful GET made
+        the server log 22 MB (about 280,000 of 293,000 lines) and buried the errors. Failures and every
+        state-changing request are still logged."""
+        status = getattr(code, 'value', code)
+        if self.command == 'GET' and str(status)[:1] in ('2', '3'):
+            return
+        super().log_request(code, size)
+
     def _redirect_home(self):
         self.send_response(303)
         self.send_header('Location', '/')

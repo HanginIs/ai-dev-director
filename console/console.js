@@ -46,7 +46,7 @@ async function refresh(){if(busy||!doc||!doc.getElementById('mission-control'))r
  for(const n of doc.querySelectorAll('.mission-stages span')){const i=order.indexOf(n.dataset.stage);n.classList.toggle('current',research?mapped===n.dataset.stage:(state===n.dataset.stage||(state==='ORDER_READY'&&n.dataset.stage==='PLANNING')));n.classList.toggle('paused',!research&&state==='HUMAN_REQUIRED'&&run.last_stage===n.dataset.stage);n.classList.toggle('done',!research&&at>i);}
  document.getElementById('shell-error').hidden=true;offlineVeil(0);
  }catch(e){const error=document.getElementById('shell-error');error.hidden=false;error.textContent='상태 연결을 확인하고 있습니다 · '+e.message;offlineVeil((window.__pollMisses||0)+1);}finally{busy=false;}}
-frame.addEventListener('load',setup);if(frame.contentDocument?.readyState==='complete')setup();setInterval(refresh,5000);
+frame.addEventListener('load',setup);if(frame.contentDocument?.readyState==='complete')setup();setInterval(()=>{if(!document.hidden)refresh();},5000);
 
 async function setupRoles(){
  const domains={OPENAI:'openai',GOOGLE:'antigravity',ANTHROPIC:'claude'};
@@ -86,7 +86,7 @@ function setupActivity(panel){
  const calls=el('details','','mission-evidence');calls.append(el('summary','최근 AI 호출'));const callList=el('div','','ai-list');callList.id='ai-calls';calls.append(callList);
  const events=el('details','','mission-evidence');events.append(el('summary','최근 진행 기록 (단계 전환)'));const eventList=el('div','','ai-list');eventList.id='ai-events';events.append(eventList);
  box.append(head,now,grid,calls,events);panel.append(box);
- refreshActivity();setInterval(refreshActivity,5000);
+ refreshActivity();setInterval(()=>{if(!document.hidden)refreshActivity();},5000);
 }
 function paintNow(a,focus){
  const now=doc.getElementById('ai-now');now.replaceChildren();

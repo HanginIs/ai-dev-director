@@ -148,6 +148,9 @@ class ProposalBuilder(AntigravityBuilder):
                   'new files or complete rewrites. Keep the reply compact. '
                   'Implement the ORDER and real behavior tests. Preserve existing behavior. No placeholder implementations. '
                   'Return only changed files. No deletion operations. Stay within file and diff budgets. '
+                  'If, after checking, the ORDER truly needs no file change (for example it asks you to verify something '
+                  'that already holds), return {"files":[],"edits":[],"no_changes":true,"summary":"what you checked and '
+                  'why nothing changes"}. Never use this to skip work the ORDER requires. '
                   'HEAD feedback and outstanding reviewer findings in context must be resolved. '
                   'Director host Python is ' + sys.version.split()[0] + '; platform is ' + sys.platform +
                   '. Honor any project-specific runtime requirements in the ORDER.\nORDER:\n' + order.model_dump_json() +
@@ -199,6 +202,20 @@ class ProposalBuilder(AntigravityBuilder):
             # Reviewer/HEAD judge the existing changes again (the repair budget bounds this).
             return BuilderResultSchema(status='COMPLETED', files_modified=[], commands_run=[result['invocation']],
                                        summary='No further changes proposed: ' + str(proposal.get('summary', ''))[:500])
+        if not files and not edits and proposal.get('no_changes') is True:
+            # "I checked and nothing has to change" is a real answer to an ORDER that asks to verify or reconcile
+            # something. It used to be rejected three times and fail the milestone. It has to be said explicitly and
+            # with a reason, the files the ORDER requires must already exist, and the Director still verifies and the
+            # Reviewer and HEAD still judge the (empty) change against the ORDER.
+            reason = str(proposal.get('summary') or '').strip()
+            if not reason:
+                raise ValueError('Builder declared no_changes without saying what it checked')
+            missing = [rel for rel in dict.fromkeys(autopilot_output(r) for r in order.required_outputs)
+                       if rel and not ((root / rel).is_file() and (root / rel).stat().st_size)]
+            if missing:
+                raise ValueError('Builder declared no_changes but required outputs are missing: ' + ', '.join(missing))
+            return BuilderResultSchema(status='COMPLETED', files_modified=[], commands_run=[result['invocation']],
+                                       summary='No changes needed: ' + reason[:500])
         new_contents = self.resolve_changes(files, edits, root, order)
         if not new_contents or len(new_contents) > order.max_files_changed:
             raise ValueError('Builder must return a bounded nonempty files list')

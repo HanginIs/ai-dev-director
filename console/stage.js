@@ -156,7 +156,7 @@ function paintMission(m){
   const mk=ms.id+':status',prev=seenSteps.get(mk);seenSteps.set(mk,ms.status);
   if(!firstPaint&&prev&&prev!==ms.status&&ms.status==='DONE')Trinity.pulse(PULSE.done);
 }
-const APPLY_KO={applied:['원본에 적용됨','ok'],blocked:['적용 보류 · 충돌/조건','warn'],pending:['적용 대기','warn'],discarded:['폐기됨',''],rolled_back:['적용 실패 · 복구됨','bad'],busy:['적용 진행 중','run'],error:['적용 오류','bad']};
+const APPLY_KO={applied:['원본에 적용됨','ok'],nothing_to_apply:['적용할 변경 없음','ok'],blocked:['적용 보류 · 충돌/조건','warn'],pending:['적용 대기','warn'],discarded:['폐기됨',''],rolled_back:['적용 실패 · 복구됨','bad'],busy:['적용 진행 중','run'],error:['적용 오류','bad']};
 let deliveryBusy=false;
 async function decideMission(id,action,extra){
   if(deliveryBusy)return;deliveryBusy=true;
@@ -384,8 +384,12 @@ function start(){
     if(e.target.closest('textarea,input,[contenteditable]')||e.ctrlKey||e.metaKey||e.altKey||document.body.dataset.view!=='stage')return;
     if(e.key==='r'||e.key==='R'||e.key==='ㄱ')startReplay();});
   setInterval(()=>{const d=new Date();$('top-clock').textContent=[d.getHours(),d.getMinutes(),d.getSeconds()].map(n=>String(n).padStart(2,'0')).join(':');if(!replay)tickTimer();},1000);
-  pollActivity();pollStatus();pollChat();pollRoles();setInterval(pollRoles,8000);
-  setInterval(pollActivity,3000);setInterval(pollStatus,6000);setInterval(pollChat,3000);
+  // A hidden or minimized console does not poll; it catches up the moment it is shown again.
+  const live=fn=>()=>{if(!document.hidden)fn();};
+  const pollAll=()=>{pollActivity();pollStatus();pollChat();pollRoles();};
+  pollAll();setInterval(live(pollRoles),8000);
+  setInterval(live(pollActivity),3000);setInterval(live(pollStatus),6000);setInterval(live(pollChat),3000);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)pollAll();});
 }
 window.TrinityStage={model:()=>lastModel,replaying:()=>!!replay};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start);else start();

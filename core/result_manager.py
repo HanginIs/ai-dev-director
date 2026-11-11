@@ -30,6 +30,7 @@ RESULT_DISCARDED = "DISCARDED"
 RESULT_APPLY_FAILED = "APPLY_FAILED_ROLLED_BACK"
 RESULT_VERIFY_FAILED = "APPLY_VERIFY_FAILED_ROLLED_BACK"
 RESULT_BLOCKED = "APPLY_BLOCKED"
+NOTHING_TO_APPLY = "Nothing to apply: the project already has every file of this result"
 
 _APPLY_LOCK = threading.Lock()
 _APPLY_INFLIGHT: set = set()                       # project keys with an apply in progress
@@ -812,7 +813,7 @@ class ResultManager:
         if tree["conflicts"] and on_conflict == "block":
             blocks.append("Conflicts: " + ", ".join(c["path"] for c in tree["conflicts"][:12]) + (" ..." if len(tree["conflicts"]) > 12 else ""))
         if not blocks and not tree["manifest"]:
-            blocks.append("Nothing to apply: the project already has every file of this result")
+            blocks.append(NOTHING_TO_APPLY)
         return {"ok": not blocks, "blocks": blocks, "manifest": tree["manifest"], "conflicts": tree["conflicts"],
                 "deleted": tree.get("deleted", []), "unchanged": tree.get("unchanged", 0), "project_path": proj,
                 "worktree_path": wt, "base_commit": tree.get("origin_ref"),
@@ -830,6 +831,13 @@ class ResultManager:
             _RECENT_APPLY_REQUESTS[rid] = "inflight"
         pre = self.tree_preconditions(run_id, on_conflict=on_conflict, cumulative=cumulative,
                                       allow_not_run=(applied_by == "HUMAN"))
+        if pre["blocks"] == [NOTHING_TO_APPLY]:
+            # The work changed nothing (a verification that found nothing to fix), or the project already holds it.
+            # That is an outcome, not a refusal: the result state is left alone and nothing reads as "blocked".
+            with _APPLY_LOCK:
+                _RECENT_APPLY_REQUESTS[rid] = "nothing"
+            self.sm.log_audit(run_id, applied_by, "RESULT_NOTHING_TO_APPLY", json.dumps({"request_id": rid}))
+            return {"status": "nothing_to_apply", "run_id": run_id, "files": [], "request_id": rid}
         if not pre["ok"]:
             with _APPLY_LOCK:
                 _RECENT_APPLY_REQUESTS[rid] = "blocked"

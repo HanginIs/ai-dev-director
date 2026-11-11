@@ -511,6 +511,8 @@ class MissionRunner:
         if result.get("status") == "applied":
             return (f"결과물을 프로젝트에 적용했습니다: {len(result.get('files', []))}개 파일 "
                     f"({mission['project_path']}). 적용 후 테스트: {result.get('verification')}")
+        if result.get("status") == "nothing_to_apply":
+            return "적용할 변경이 없습니다: 프로젝트가 이미 이 결과와 같습니다."
         why = "; ".join(result.get("blocks") or []) or result.get("reason") or result.get("error") or result.get("status")
         return (f"결과물을 자동 적용하지 않았습니다 ({result.get('status')}): {str(why)[:400]}. "
                 f"작업본: {mission.get('base_worktree')}")

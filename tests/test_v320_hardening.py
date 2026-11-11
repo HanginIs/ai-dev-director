@@ -107,3 +107,57 @@ def test_posix_document_paths_in_an_order_are_read_and_lookalikes_are_not(tmp_pa
     order = OrderSchema(goal=f"Use http://127.0.0.1:1234/v1/readme.md and docs/SPEC.md and ~/x/y.md; read {doc} first.",
                         allowed_paths=["src/**"])
     assert referenced_documents(order) == {str(doc): "SPEC"}
+
+
+def _builder_reply(monkeypatch, reply):
+    import json as _json
+    from core.research_runner import TriadResearchRunner
+    monkeypatch.setattr(TriadResearchRunner, "invoke", lambda *a: dict(output=_json.dumps(reply), invocation="t",
+                                                                       exit_code=0, duration_sec=0))
+
+
+def test_a_builder_may_declare_that_nothing_has_to_change_but_only_explicitly(tmp_path, monkeypatch):
+    import sys
+    import pytest
+    from agents.proposal_builder import ProposalBuilder
+    from schemas.order import OrderSchema
+    builder = ProposalBuilder(executable=sys.executable)
+    order = OrderSchema(goal="check the README table against the menu", allowed_paths=["README.md"])
+
+    _builder_reply(monkeypatch, {"files": [], "edits": [], "no_changes": True, "summary": "all 12 rows match main.swift"})
+    res = builder.run(order, str(tmp_path))
+    assert res.status == "COMPLETED" and res.files_modified == [] and "all 12 rows match" in res.summary
+
+    for reply in ({"files": [], "summary": "nothing"},                              # not declared
+                  {"files": [], "no_changes": "true", "summary": "nothing"},        # not the boolean
+                  {"files": [], "no_changes": True, "summary": "  "}):              # no reason given
+        _builder_reply(monkeypatch, reply)
+        with pytest.raises(ValueError):
+            builder.run(order, str(tmp_path))
+
+
+def test_no_changes_is_refused_while_a_required_output_is_missing(tmp_path, monkeypatch):
+    import sys
+    import pytest
+    from agents.proposal_builder import ProposalBuilder
+    from schemas.order import OrderSchema
+    builder = ProposalBuilder(executable=sys.executable)
+    order = OrderSchema(goal="write the report", allowed_paths=["docs/**"], required_outputs=["docs/report.md"])
+    _builder_reply(monkeypatch, {"files": [], "no_changes": True, "summary": "nothing to do"})
+    with pytest.raises(ValueError, match="required outputs are missing"):
+        builder.run(order, str(tmp_path))
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "report.md").write_text("report\n", encoding="utf-8")
+    assert builder.run(order, str(tmp_path)).files_modified == []
+
+
+def test_successful_polling_gets_are_not_logged_and_everything_else_is(monkeypatch):
+    from http.server import BaseHTTPRequestHandler
+    import dashboard_server
+    logged = []
+    monkeypatch.setattr(BaseHTTPRequestHandler, "log_request", lambda self, code="-", size="-": logged.append((self.command, code)))
+    handler = dashboard_server.DashboardHandler.__new__(dashboard_server.DashboardHandler)
+    for command, code in (("GET", 200), ("GET", 304), ("GET", 404), ("GET", 500), ("POST", 200), ("POST", 403)):
+        handler.command = command
+        handler.log_request(code)
+    assert logged == [("GET", 404), ("GET", 500), ("POST", 200), ("POST", 403)]

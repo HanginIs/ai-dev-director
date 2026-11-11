@@ -387,3 +387,15 @@ def test_a_refused_repeat_request_leaves_an_applied_result_applied(tmp_path, cle
     assert rm.result_state(rid)["state"] == "APPLIED"
     assert rm.apply_tree(rid, request_id="final-b")["status"] == "blocked"      # refused ...
     assert rm.result_state(rid)["state"] == "APPLIED"                           # ... and still applied
+
+
+def test_a_result_that_changes_nothing_is_not_reported_as_blocked(tmp_path, cleanup_runs):
+    proj = project(tmp_path)
+    rid = "RUN-TEST-DLV-NOTHING"; cleanup_runs.append(rid)
+    wt = fake_run(proj, rid, snapshot(str(proj)))                 # the AIs verified and changed nothing
+    rm = ResultManager(config={"verification": {"test_command": None}})
+    rm.record_review(rid, str(wt))
+    before = rm.result_state(rid).get("state")
+    out = rm.apply_tree(rid, request_id="nothing-a")
+    assert out["status"] == "nothing_to_apply" and out["files"] == []
+    assert rm.result_state(rid).get("state") == before            # not rewritten to APPLY_BLOCKED
