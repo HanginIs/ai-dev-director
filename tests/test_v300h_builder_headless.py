@@ -83,7 +83,8 @@ def test_exit_zero_without_task_changes_is_failed_and_settings_restore(
     assert "command(*)" in observed["deny"]
     assert "unsandboxed(*)" in observed["deny"]
     file_rules = [rule for rule in observed["allow"] if rule.startswith(("read_file(", "write_file("))]
-    assert file_rules and all(":/" in rule for rule in file_rules)
+    # absolute paths: a Windows drive ('C:/...') or a POSIX root ('(/...')
+    assert file_rules and all(":/" in rule or "(/" in rule for rule in file_rules)
     assert not any("write_file(src" in rule or "write_file(tests" in rule for rule in file_rules)
     assert json.loads(settings.read_text(encoding="utf-8")) == original
     assert not settings.with_name(settings.name + ".director-original").exists()

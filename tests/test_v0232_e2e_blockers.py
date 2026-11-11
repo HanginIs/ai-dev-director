@@ -200,7 +200,14 @@ def _free_port():
 
 
 def _listeners_on(port):
-    return [c for c in psutil.net_connections(kind="tcp")
+    try:
+        conns = psutil.net_connections(kind="tcp")
+    except psutil.AccessDenied:
+        # macOS does not let a normal user list other processes' sockets. Both servers of this test live in this
+        # process, so its own sockets answer the same question.
+        proc = psutil.Process()
+        conns = (getattr(proc, "net_connections", None) or proc.connections)(kind="tcp")
+    return [c for c in conns
             if c.status == psutil.CONN_LISTEN and c.laddr and c.laddr.port == port]
 
 

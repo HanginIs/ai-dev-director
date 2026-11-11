@@ -79,6 +79,7 @@ def test_abc_result_ready_view_and_tests(rm, server):
 
 # ------------------------------------------------------------------ D: open worktree uses only the canonical recorded path
 
+@pytest.mark.skipif(os.name != "nt", reason="pretends to be Windows (os.name='nt'); pathlib then cannot build paths elsewhere")
 def test_d_open_worktree_canonical_only(rm, monkeypatch):
     with make_git_project() as proj:
         run_id, orch = _pass_run(proj)

@@ -86,3 +86,24 @@ def test_runs_left_open_by_a_quit_app_are_closed_on_the_next_start(tmp_path):
     assert sm.get_run("RUN-STILL-RUNNING")["current_state"] == State.BUILDING
     assert sm.get_run("RUN-ALIVE")["current_state"] == State.BUILDING
     assert finalize_orphaned_runs(store, sm) == []                # idempotent
+
+
+def test_cli_names_are_read_from_either_path_style():
+    from core.process_runner import cli_basename, REAL_CLI_BASENAMES
+    from core import usage
+    for path in (r"C:\Users\x\AppData\Roaming\npm\claude.cmd", "/usr/local/bin/claude", "claude.exe", r"D:\t\CLAUDE.EXE"):
+        assert cli_basename(path) in REAL_CLI_BASENAMES, path
+        assert usage.provider_of(path) == "ANTHROPIC", path
+    assert cli_basename("/usr/bin/python3") not in REAL_CLI_BASENAMES
+    assert usage.provider_of(r"C:\x\codex.cmd") == "OPENAI" and usage.provider_of("/opt/homebrew/bin/agy") == "GOOGLE"
+
+
+def test_posix_document_paths_in_an_order_are_read_and_lookalikes_are_not(tmp_path):
+    from core.builder_context import referenced_documents
+    from schemas.order import OrderSchema
+    doc = tmp_path / "my notes" / "spec.md"
+    doc.parent.mkdir()
+    doc.write_text("SPEC", encoding="utf-8")
+    order = OrderSchema(goal=f"Use http://127.0.0.1:1234/v1/readme.md and docs/SPEC.md and ~/x/y.md; read {doc} first.",
+                        allowed_paths=["src/**"])
+    assert referenced_documents(order) == {str(doc): "SPEC"}

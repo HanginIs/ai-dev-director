@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import subprocess
 import tempfile
@@ -67,7 +68,7 @@ def test_a2_permission_guard_hook_blocks_escapes():
         def run_guard(tool_name: str, args: dict) -> dict:
             payload = json.dumps({"toolCall": {"name": tool_name, "args": args}})
             res = subprocess.run(
-                ["python", str(guard_script)],
+                [sys.executable, str(guard_script)],
                 input=payload,
                 text=True,
                 capture_output=True,
@@ -77,7 +78,9 @@ def test_a2_permission_guard_hook_blocks_escapes():
             return json.loads(res.stdout.strip())
 
         # Escape 1: Outside worktree write
-        r1 = run_guard("write_to_file", {"TargetFile": "C:/temp/escape.txt"})
+        # an absolute path outside the worktree on this OS ('C:/...' is a relative path on macOS/Linux)
+        outside = "C:/temp/escape.txt" if os.name == "nt" else "/tmp/director-escape/escape.txt"
+        r1 = run_guard("write_to_file", {"TargetFile": outside})
         assert r1["decision"] == "deny"
         assert "outside allowed worktree" in r1["reason"]
 

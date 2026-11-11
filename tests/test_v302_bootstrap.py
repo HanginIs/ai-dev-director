@@ -53,7 +53,9 @@ def test_snapshot_excludes_untracked_sensitive_directories(tmp_path):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text('{}')
     sha = snapshot(p)
-    assert git(p, 'ls-tree', '-r', '--name-only', sha) == ''
+    # secrets/ and credentials/ stay out. data/*.json is carried on purpose: dropping a project's data fixtures
+    # between milestones once failed every following step (see core.bootstrap.SUFFIXES).
+    assert git(p, 'ls-tree', '-r', '--name-only', sha) == 'data/fixture.json'
 
 def test_control_root_rejected():
     from core.bootstrap import SOURCE_ROOT

@@ -359,6 +359,11 @@ class ResultManager:
         return (ev.get("baseline") == "PREEXISTING_FAILURES" and baseline.get("passed") is False
                 and post.get("passed") is True)
 
+    def _result_is_final(self, run_id: str) -> bool:
+        """APPLIED and DISCARDED are final. A repeat request is refused and logged, but it must not rewrite the
+        state: an applied result once showed as APPLY_BLOCKED after a second click."""
+        return self.result_state(run_id).get("state") in (RESULT_APPLIED, RESULT_DISCARDED)
+
     def result_preconditions(self, run_id: str) -> Dict[str, Any]:
         """What the console shows before a person applies one run (a person may apply an unverified result)."""
         if self._load(run_id, "source_snapshot.json") is not None:
@@ -459,7 +464,8 @@ class ResultManager:
         if not pre["ok"]:
             with _APPLY_LOCK:
                 _RECENT_APPLY_REQUESTS[rid] = "blocked"
-            self._set_state(run_id, RESULT_BLOCKED, "; ".join(pre["blocks"]), rid)
+            if not self._result_is_final(run_id):
+                self._set_state(run_id, RESULT_BLOCKED, "; ".join(pre["blocks"]), rid)
             self.sm.log_audit(run_id, applied_by, "RESULT_APPLY_BLOCKED", json.dumps({"blocks": pre["blocks"], "request_id": rid}, ensure_ascii=False))
             return {"status": "blocked", "run_id": run_id, "blocks": pre["blocks"], "request_id": rid}
         proj = pre["project_path"]; key = _project_key(proj)
@@ -827,7 +833,7 @@ class ResultManager:
         if not pre["ok"]:
             with _APPLY_LOCK:
                 _RECENT_APPLY_REQUESTS[rid] = "blocked"
-            if not pre.get("previous_run_applied"):
+            if not pre.get("previous_run_applied") and not self._result_is_final(run_id):
                 self._set_state(run_id, RESULT_BLOCKED, "; ".join(pre["blocks"]), rid)
             self.sm.log_audit(run_id, applied_by, "RESULT_APPLY_BLOCKED", json.dumps({"blocks": pre["blocks"], "request_id": rid}, ensure_ascii=False))
             return {"status": "blocked", "run_id": run_id, "blocks": pre["blocks"], "conflicts": pre["conflicts"], "request_id": rid}

@@ -49,6 +49,12 @@ class ProcessResult:
         self.pid = pid
         self.timeout_reason = timeout_reason
 
+def cli_basename(argv0) -> str:
+    """File name of an executable given with either separator. os.path.basename on macOS/Linux does not split a
+    Windows path, so 'C:\\x\\claude.cmd' slipped past the unit-test guard there."""
+    return str(argv0 or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+
 REAL_CLI_BASENAMES = {
     "codex", "codex.cmd", "codex.exe", "codex.ps1",
     "claude", "claude.cmd", "claude.exe", "claude.ps1",
@@ -192,7 +198,7 @@ class ProcessTreeRunner:
         # test explicitly opted in (integration_cli marker sets DIRECTOR_ALLOW_REAL_CLI=1). This prevents mock tests
         # from consuming real quota or hanging for the full CLI timeout.
         if os.environ.get("DIRECTOR_TESTING") == "1" and os.environ.get("DIRECTOR_ALLOW_REAL_CLI") != "1":
-            base = os.path.basename(str(argv[0])).lower() if argv else ""
+            base = cli_basename(argv[0]) if argv else ""
             if base in REAL_CLI_BASENAMES:
                 cls.blocked_real_cli_calls.append(list(argv))
                 raise RealCliCallDuringUnitTest(

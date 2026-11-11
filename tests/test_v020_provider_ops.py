@@ -2,7 +2,6 @@ import pytest
 import sqlite3
 from pathlib import Path
 from core.provider_manager import ProviderManager, ProviderStatus, FailoverMode
-import requests
 import json
 
 def get_db(tmp_path):
@@ -124,6 +123,7 @@ def test_e_cli_timeout(tmp_path):
 
 @pytest.mark.integration_dashboard
 def test_f_dashboard():
+    requests = pytest.importorskip("requests")   # only this opt-in test needs it
     # We can fetch the dashboard locally
     try:
         resp = requests.get("http://localhost:8080/")

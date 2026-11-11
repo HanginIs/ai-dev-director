@@ -374,3 +374,16 @@ def test_bridge_mission_start_decide_and_duplicate_request(http_server, monkeypa
     assert code == 200 and decided[0][0] == "MSN-X" and decided[0][2]["by"] == "SOLOMON" and decided[0][2]["on_conflict"] == "skip"
     code, data = request(http_server, "GET", "/bridge/digest", headers=hdr)
     assert code == 200 and "awaiting_decision" in json.loads(data)
+
+
+def test_a_refused_repeat_request_leaves_an_applied_result_applied(tmp_path, cleanup_runs):
+    proj = project(tmp_path)
+    rid = "RUN-TEST-DLV-FINAL"; cleanup_runs.append(rid)
+    wt = fake_run(proj, rid, snapshot(str(proj)))
+    (wt / "a.py").write_text("a = 2\n", encoding="utf-8")
+    rm = ResultManager(config={"verification": {"test_command": None}})
+    rm.record_review(rid, str(wt))
+    assert rm.apply_tree(rid, request_id="final-a")["status"] == "applied"
+    assert rm.result_state(rid)["state"] == "APPLIED"
+    assert rm.apply_tree(rid, request_id="final-b")["status"] == "blocked"      # refused ...
+    assert rm.result_state(rid)["state"] == "APPLIED"                           # ... and still applied

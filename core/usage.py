@@ -34,7 +34,7 @@ def context() -> Dict[str, Any]:
 
 
 def provider_of(argv0: str) -> Optional[str]:
-    base = os.path.basename(str(argv0 or "")).lower()
+    base = str(argv0 or "").replace("\\", "/").rsplit("/", 1)[-1].lower()   # either path style, on any OS
     return PROVIDER_BY_CLI.get(base.split(".")[0])
 
 

@@ -43,7 +43,8 @@ def test_a_unfixed_order_would_have_escalated(tmp_path):
     project.mkdir()
     order = _order(allowed_paths=[str(project / "src")], acceptance_criteria=["a test passes"])
     reasons = SafetyPolicy.assess_order_for_auto_run(order)
-    assert any("INVALID_PATH" in r and "drive-absolute" in r for r in reasons)
+    # 'drive-absolute path' on Windows, 'absolute path' for a POSIX root
+    assert any("INVALID_PATH" in r and "absolute path not allowed" in r for r in reasons)
 
 
 def test_protected_path_outside_project_is_dropped_not_escalated(tmp_path):
