@@ -88,7 +88,11 @@ final class DirectorApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         원본: DAVZD ai-dev-director v3.1.8 (MIT License)
 
         수정 사항: macOS 전용 앱(Swift · WKWebView), 프로젝트별 테스트 명령 자동 감지, \
+        검수한 결과만 반영 · 검증 안 한 결과는 자동 반영 안 함, 미션 판정 · 정지 처리 보강, \
         앱 종료 처리 개선, 콘솔 정리(솔로몬 연동 · 방송 모드 제거, 원본 화면 → 스테이지 복귀)
+
+        고칠 항목은 Codex(OpenAI) · Antigravity(Google) · Claude(Anthropic) 세 AI의 \
+        코드 분석 결과를 종합해 정했고, 코드 수정과 테스트는 Claude와 함께 했습니다.
 
         github.com/HanginIs/ai-dev-director
         """
