@@ -48,6 +48,14 @@ verification:
 bootstrap:
   enabled: true
 
+# The project's own record of past decisions: the start of its change log (newest first) is shown to HEAD when it
+# plans a mission step and to the Reviewer, so a plan does not quietly reverse something the project decided on
+# purpose. The first of these files found in the project is used (root first, then one sub-folder).
+# max_chars: 0 turns it off.
+project_history:
+  files: ["CHANGELOG.md", "docs/CHANGELOG.md", "CHANGES.md", "HISTORY.md", "RELEASE_NOTES.md", "DECISIONS.md", "docs/DECISIONS.md"]
+  max_chars: 4000
+
 # Per-project verification (kept here, never inside the project, so a Builder cannot weaken it).
 # Machine-specific entries belong in the git-ignored config.local.yaml next to this file (same structure,
 # deep-merged over this one). Keys are absolute project roots. Example:

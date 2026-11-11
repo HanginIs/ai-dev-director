@@ -548,8 +548,8 @@ class Orchestrator:
 
     def _run_builder_autonomous(self, run_id: str, order: OrderSchema, worktree_path: str, logger: logging.Logger,
                                 provenance_records: list):
-        """HEAD proxy Builder stage: a malformed/empty/truncated proposal or a timeout is retried with concrete
-        feedback; an unavailable provider (or the final attempt) moves the Builder to another provider.
+        """HEAD proxy Builder stage: a malformed/empty/truncated proposal is retried with concrete feedback; an
+        unavailable provider, a timeout (or the final attempt) moves the Builder to another provider.
         The proposal is still validated as one batch before any write, so a failed attempt leaves no files."""
         attempts = max(1, int(autopilot.setting(self.config, "builder_attempts", 3)))
         # Attempt history is cumulative over the run's correction rounds, so a provider that already failed twice in
@@ -559,9 +559,16 @@ class Orchestrator:
         for h in history:
             if h.get("category") != "ORDER_INPUT":
                 failures[h.get("provider")] = failures.get(h.get("provider"), 0) + 1
-        tried = {self._get_agent_domain(self.builder)} | {d for d, n in failures.items() if n >= 2}
-        if failures.get(self._get_agent_domain(self.builder), 0) >= 2:
-            self._swap_agent("builder", run_id, logger, tried, "BUILDING", "failed repeatedly earlier in this run")
+        # A provider that timed out in this run is not asked again while another one is available. Measured on
+        # 2026-11-08..11: a Builder retried on the provider that had just timed out succeeded 29 times out of 91,
+        # and every failed retry cost another 180 s of silence.
+        timed_out = {h.get("provider") for h in history if h.get("category") == ErrorCategory.TIMEOUT.value}
+        current = self._get_agent_domain(self.builder)
+        tried = {current} | {d for d, n in failures.items() if n >= 2} | timed_out
+        if failures.get(current, 0) >= 2 or current in timed_out:
+            self._swap_agent("builder", run_id, logger, tried, "BUILDING",
+                             "timed out earlier in this run" if current in timed_out
+                             else "failed repeatedly earlier in this run")
         round_start = len(history)
         builder_result = None
         for attempt in range(1, attempts + 1):
@@ -615,7 +622,8 @@ class Orchestrator:
                     self.pm.parse_cli_error(domain, err)
                 except Exception:
                     pass
-            if cat in self.PROVIDER_DOWN or attempt == attempts - 1 or "PROVIDER_UNAVAILABLE" in err:
+            if (cat in self.PROVIDER_DOWN or cat == ErrorCategory.TIMEOUT or attempt == attempts - 1
+                    or "PROVIDER_UNAVAILABLE" in err):
                 if not self._swap_agent("builder", run_id, logger, tried, "BUILDING", err) and cat in self.PROVIDER_DOWN:
                     break
 
@@ -826,11 +834,27 @@ class Orchestrator:
             if getattr(prov, "duration_sec", None) is not None:
                 self.pm.update_latency(getattr(self.reviewer, "provider", "ANTHROPIC"), prov.duration_sec)
 
+    def _with_decision_history(self, run_id: str, project_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """The Reviewer's context plus the project's recorded decisions (core/project_history.py), read from the
+        project itself and never from the worktree the Builder has just written."""
+        context = dict(project_context or {})
+        if "decision_history" not in context:
+            try:
+                from core import project_history
+                project = (self.sm.get_run(run_id) or {}).get("project_path")
+                decisions = project_history.read(project, self.config)
+            except Exception:
+                decisions = None
+            if decisions:
+                context["decision_history"] = decisions
+        return context
+
     def run_reviewer_with_failover(self, run_id: str, order: OrderSchema, verification: Dict[str, Any],
                                    project_context: Dict[str, Any], worktree_path: str, logger: logging.Logger,
                                    provenance_records: list):
         """Trial claim -> review (exceptions recorded, never left uncaught) -> unparseable/CLI-failure handling ->
         provider failover -> provenance. Returns (review_result, stop)."""
+        project_context = self._with_decision_history(run_id, project_context)
         if self._proxy():
             return self._run_reviewer_autonomous(run_id, order, verification, project_context, worktree_path, logger, provenance_records)
         git_diff = verification.get("git_diff", "") if verification else ""

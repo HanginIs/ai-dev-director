@@ -100,7 +100,7 @@ class CodexReviewer:
         # Execute Codex CLI
         if self.executable and Path(self.executable).exists():
             self.logger.info(f"[Codex Reviewer] Executing Codex CLI at: {self.executable}")
-            return self._review_with_cli(order, git_diff, verification, worktree_path)
+            return self._review_with_cli(order, git_diff, verification, worktree_path, project_context)
 
         # If no CLI binary found, return CONFIG_ERROR
         err_msg = "CONFIG_ERROR: Official Codex CLI ('codex') not found in OS PATH. Cannot proceed."
@@ -118,7 +118,8 @@ class CodexReviewer:
         order: OrderSchema,
         git_diff: str,
         verification: Dict[str, Any],
-        worktree_path: Optional[str] = None
+        worktree_path: Optional[str] = None,
+        project_context: Optional[Dict[str, Any]] = None
     ) -> ReviewResultSchema:
         """Executes Codex CLI subprocess in read-only sandbox mode."""
         wt = Path(worktree_path).resolve() if worktree_path else Path.cwd()
@@ -126,6 +127,8 @@ class CodexReviewer:
 
         from core import usage
         usage.set_context(role="REVIEWER")
+        from core import project_history
+        decisions = project_history.review_block((project_context or {}).get("decision_history"))
         review_prompt = (
             "You are an expert read-only code reviewer evaluating code modifications in a repository.\n"
             "Review the git diff and test evidence against the work ORDER.\n\n"
@@ -142,7 +145,7 @@ class CodexReviewer:
             f"VERIFICATION SUMMARY: {verification.get('summary')}\n"
             f"TEST COUNTS (Director's own run): {json.dumps(verification.get('test_counts'))}\n"
             f"TEST OUTPUT TAIL: {((verification.get('test') or {}).get('output') or '')[-1500:]}\n\n"
-            f"GIT DIFF:\n```diff\n{git_diff}\n```\n\n"
+            f"{decisions}GIT DIFF:\n```diff\n{git_diff}\n```\n\n"
             "FORMATTING MANDATE:\n"
             "Your output MUST contain a JSON code block formatted as:\n"
             "```json\n"

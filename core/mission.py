@@ -400,6 +400,13 @@ class MissionRunner:
             context = orch._read_project_context(where)
         except Exception:
             context = {"project_path": where}
+        try:
+            from core import project_history
+            decisions = project_history.read(mission["project_path"], getattr(orch, "config", None))
+        except Exception:
+            decisions = None
+        if decisions:
+            context["decision_history"] = decisions
         last_run = mission["steps"][-1].get("run_id") or mission["mission_id"]
         from core import usage
         usage.set_context(stage="MISSION_PLANNING", run_id=None)
@@ -484,12 +491,44 @@ class MissionRunner:
                 f"목표: {mission['goal'][:300]}\n{mission['summary'][:1500]}\n결과물 위치(작업본): {where}")
         if blocked:
             text += f"\n사유: {blocked[:600]}"
+        # Measured before applying: afterwards the project and the result are the same and nothing differs.
+        size_line = self._change_size_line(mission)
         # Apply first, so the one final message says whether the project now holds the result.
         applied_line = self._auto_apply(mission)
+        if size_line:
+            text += "\n" + size_line
         if applied_line:
             text += "\n" + applied_line
         self.notify(text, run_id=mission["steps"][-1].get("run_id"), role="HEAD")
         return mission
+
+    def _change_size_line(self, mission: Dict[str, Any]) -> Optional[str]:
+        """The size of everything the mission changes in the project, for the final message. Each step is held to
+        the safety caps, but a mission of several steps can add up to far more than one step may change; the total
+        is reported (never blocked) so the operator sees it before trusting the result."""
+        rid = deliverable_run_id(mission)
+        if not rid:
+            return None
+        try:
+            from core.result_manager import ResultManager
+            config = getattr(self.factory(), "config", {}) or {}
+            totals = ResultManager(config=config).change_totals(rid)
+        except Exception:
+            return None
+        if not totals:
+            return None
+        mission["change_totals"] = totals
+        self.store.save(mission)
+        line = (f"미션 전체 변경: {totals['files']}개 파일 (새 파일 {totals['new_files']}개), "
+                f"+{totals['added']}줄 / -{totals['removed']}줄")
+        caps = config.get("safety") or {}
+        try:
+            cap_files, cap_lines = int(caps.get("max_files_changed")), int(caps.get("max_diff_lines"))
+        except (TypeError, ValueError):
+            return line
+        if totals["files"] > cap_files or totals["added"] + totals["removed"] > cap_lines:
+            line += f". 한 단계 상한({cap_files}개 파일, {cap_lines}줄)을 넘는 누적 변경이니 내용을 직접 확인하세요."
+        return line
 
     def _auto_apply(self, mission: Dict[str, Any]) -> Optional[str]:
         """Deliver the finished work into the project when the mission's policy says so, and return the line that

@@ -6,7 +6,7 @@ A local development director that runs three logged-in AI coding CLIs (Claude Co
 
 This repository is a fork of [ai-dev-director by DAVZD](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8, changed to work on macOS. The original is Windows-first. This fork adds a native macOS app and hardens how results are applied, how missions are judged and how repositories are handled.
 
-- **Status:** used daily on macOS. All 649 tests pass on macOS (2026-11-11; one test that pretends to be Windows is skipped).
+- **Status:** used daily on macOS. All 675 tests pass on macOS (2026-11-11; one test that pretends to be Windows is skipped).
 - **Not verified:** the changes in this fork have not been run on Windows or Linux. TRIAD research mode is the original feature unchanged; beyond passing unit tests it has not been verified in this fork.
 
 The console and all mission messages are in Korean.
@@ -82,6 +82,8 @@ The last line reports the apply step.
 - **"적용할 변경이 없습니다"** (nothing to apply): the mission only checked and found nothing to fix, or the project already has the same content. This is not an error.
 - **"자동 적용하지 않았습니다 (reason)"** (not applied automatically): applying was held back because of a conflict, verification that did not run, a worktree changed after review, and so on. The worktree is kept, and you can apply or discard it from the console.
 
+When there is a result that passed, the line before it reads **"미션 전체 변경: N개 파일 (새 파일 M개), +A줄 / -B줄"** (total change of the mission: N files, M of them new, A lines added, B removed). It is the sum over all milestones, and a note asks you to check the changes yourself when it exceeds the cap for one milestone. It is reported only and never blocks.
+
 ## Rules it enforces
 
 | Rule | Behavior |
@@ -116,7 +118,7 @@ Verification commands live in the Director's settings and not inside the project
 
 ## Configuration
 
-- **`config.yaml`:** CLI per role, timeouts, safety caps (`max_files_changed`, `max_diff_lines`), default verification commands, autonomy mode and profiles.
+- **`config.yaml`:** CLI per role, timeouts, safety caps (`max_files_changed`, `max_diff_lines`), default verification commands, the change history file (`project_history`), autonomy mode and profiles.
 - **`config.local.yaml`:** settings that fit one computer only. It is not tracked by git and is merged over `config.yaml`.
 - **`companion.json`:** console port (8081 by default) and the list of allowed projects.
 
@@ -139,6 +141,14 @@ projects:
 `autonomy.auto_apply` is one of `off`, `on_done` (only when the goal was judged met) and `on_pass` (whenever there is a result that passed; the default).
 
 The console listens on `127.0.0.1` only. Requests that change state require a local-origin check and a token (`data/solomon-bridge.token`, readable only by you).
+
+## The project's past decisions
+
+HEAD and the reviewer do not remember earlier missions. So when the project has a change history file, its beginning (4,000 characters by default; the newest entries are assumed to be at the top) is shown to HEAD when it plans a milestone and to the reviewer. HEAD is told not to plan a step that reverses a recorded decision unless the goal asks for it, and the reviewer is told to report such a change.
+
+- **Files looked for:** `CHANGELOG.md`, `docs/CHANGELOG.md`, `CHANGES.md`, `HISTORY.md`, `RELEASE_NOTES.md`, `DECISIONS.md`, `docs/DECISIONS.md`, in this order, in the project root. If none is there, sub-folders one level down are checked, and a file is used only when exactly one sub-folder has one.
+- **Where it is read:** always from the project itself. The copy in the worktree the BUILDER has just edited is not used.
+- **Changing it:** set `project_history.files` and `max_chars` in `config.yaml`. `max_chars: 0` turns it off.
 
 ## Where a follow-up mission starts
 
@@ -188,6 +198,8 @@ Unit tests do not run the real CLIs and do not touch the working database. Integ
 - **Apply protection:** only reviewed files are applied, a file you deleted is a conflict, and the state of a result that was already applied is not overwritten.
 - **Mission verdicts:** a mission with no passed milestone is not shown as done, repeated verification failures that cannot be fixed end the mission, a "nothing has to change" answer is accepted, and follow-up missions prefer the current project state.
 - **Stop and recovery:** only the processes of the named mission are ended, and leftover runs are closed when the server starts.
+- **Switching after a timeout:** when the BUILDER ends in a timeout, the next attempt goes to another CLI at once. The original called the same CLI once more before switching.
+- **Past decisions and change size:** the project's change history is shown to HEAD and the reviewer, and the total change of a mission is written in its final message.
 - **Repositories and database:** no repository is created inside another one; SQLite runs in WAL mode with a wait time.
 - **macOS paths:** executable names and document paths are read correctly in macOS form as well.
 - **Console:** the Solomon link and the broadcast mode were removed, and the workshop view has a link back to the stage view.
@@ -197,8 +209,9 @@ Unit tests do not run the real CLIs and do not touch the working database. Integ
 - Even large changes are submitted by the BUILDER as file contents in JSON, so they can hit a CLI's output limit.
 - It is bound by each CLI's subscription quota. When a quota runs out, another CLI takes over.
 - When the reviewer and HEAD end up on the same CLI, the run continues with a `REDUCED_INDEPENDENCE` mark.
-- The changed-line cap applies per milestone only. There is no cap on the total change of a mission that spans several milestones.
-- HEAD and the reviewer do not read the project's past decisions (its change history) on their own. A plan that reverses an existing safety rule can pass, so read the changes yourself before applying a result.
+- The changed-line cap applies per milestone only. There is no cap on the total change of a mission that spans several milestones; the total is only reported in the final message.
+- The only past decisions HEAD and the reviewer see are the beginning of the change history file. When there is no such file, or a decision is not written there, a plan that reverses an existing rule can still pass, so read the changes yourself before applying a result.
+- A CLI that timed out is avoided within one milestone only. The next milestone starts with the default BUILDER again.
 - Runs that finished before these changes have no review record, so applying them is refused. They have to be reviewed again.
 
 ## Credits and license

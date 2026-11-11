@@ -227,6 +227,55 @@ def test_builder_moves_to_another_provider_on_the_last_attempt(tmp_path, monkeyp
     assert seen == ["primary", "primary"] and swaps == [("builder", "BUILDING")] and len(calls) == 1
 
 
+def test_builder_timeout_moves_to_another_provider_at_once(tmp_path, monkeypatch):
+    """A silent Builder is not asked a second time: the next attempt goes to another provider."""
+    orch = proxy_orch()
+    quiet(monkeypatch, orch)
+    seen, calls = [], []
+
+    def hung(order, worktree_path, builder_fn=None):
+        seen.append("primary")
+        raise TimeoutError("TIMEOUT: GOOGLE: NO_OUTPUT_TIMEOUT: No output for 180s")
+    monkeypatch.setattr(orch.builder, "run", hung)
+
+    class Backup:
+        provider = "anthropic"
+        run = staticmethod(good_build(calls))
+    swaps = []
+
+    def swap(role, run_id, logger, tried, stage, why):
+        swaps.append((role, stage))
+        orch.builder = Backup()
+        return True
+    monkeypatch.setattr(orch, "_swap_agent", swap)
+    review_green(monkeypatch, orch)
+    decide_by_tests(monkeypatch, orch)
+    out = orch.run(str(tmp_path / "proj"), "double", order=OrderSchema(**ORDER))
+    assert out["final_state"] == State.PASS
+    assert seen == ["primary"] and swaps == [("builder", "BUILDING")] and len(calls) == 1
+    assert orch._load_json(out["run_id"], "builder_attempts.json")[0]["category"] == "TIMEOUT"
+
+
+def test_builder_timeout_retries_the_same_provider_when_no_other_is_left(tmp_path, monkeypatch):
+    orch = proxy_orch()
+    quiet(monkeypatch, orch)
+    seen, calls = [], []
+    good = good_build(calls)
+
+    def slow_once(order, worktree_path, builder_fn=None):
+        seen.append("primary")
+        if len(seen) == 1:
+            raise TimeoutError("TIMEOUT: GOOGLE: NO_OUTPUT_TIMEOUT: No output for 180s")
+        return good(order, worktree_path)
+    monkeypatch.setattr(orch.builder, "run", slow_once)
+    monkeypatch.setattr(orch, "_swap_agent", lambda *a: False)
+    review_green(monkeypatch, orch)
+    decide_by_tests(monkeypatch, orch)
+    out = orch.run(str(tmp_path / "proj"), "double", order=OrderSchema(**ORDER))
+    assert out["final_state"] == State.PASS and seen == ["primary", "primary"]
+    assert "timed out" in calls[0]                                          # the retry still gets the feedback
+
+
 # ------------------------------------------------------------------ HEAD proxy decisions
 
 def test_non_serious_head_escalation_becomes_a_repair(tmp_path, monkeypatch):
@@ -864,6 +913,33 @@ def test_provider_that_failed_twice_this_run_is_not_rotated_back(tmp_path, monke
     res, stop = orch._run_builder_autonomous("RUN-HIST", OrderSchema(**ORDER), str(tmp_path), logging.getLogger("t"), [])
     assert stop is None and res.status == "COMPLETED"
     assert swaps and "GOOGLE" in swaps[0]                                   # swapped away before the first attempt
+
+
+def test_provider_that_timed_out_once_this_run_is_not_asked_again(tmp_path, monkeypatch):
+    orch = proxy_orch()
+    quiet(monkeypatch, orch)
+    orch.sm.create_run("RUN-TIMEOUT-HIST", str(tmp_path), "g")
+    orch._save_json("RUN-TIMEOUT-HIST", "builder_attempts.json", [
+        {"attempt": 1, "provider": orch._get_agent_domain(orch.builder), "category": "TIMEOUT",
+         "error": "BUILDER_EXCEPTION: TIMEOUT: GOOGLE: NO_OUTPUT_TIMEOUT: No output for 180s"}])
+    first = orch._get_agent_domain(orch.builder)
+    swaps = []
+
+    class Other:
+        provider = "openai"
+        run = staticmethod(good_build([]))
+
+    def swap(role, run_id, logger, tried, stage, why):
+        swaps.append((set(tried), why))
+        orch.builder = Other()
+        return True
+    monkeypatch.setattr(orch, "_swap_agent", swap)
+    import logging
+    (tmp_path / "tests").mkdir()
+    res, stop = orch._run_builder_autonomous("RUN-TIMEOUT-HIST", OrderSchema(**ORDER), str(tmp_path),
+                                             logging.getLogger("t"), [])
+    assert stop is None and res.status == "COMPLETED"
+    assert len(swaps) == 1 and first in swaps[0][0] and "timed out" in swaps[0][1]
 
 
 def test_files_the_builder_must_edit_are_always_in_its_context(tmp_path, monkeypatch):

@@ -819,6 +819,40 @@ class ResultManager:
                 "worktree_path": wt, "base_commit": tree.get("origin_ref"),
                 "apply_scope": "mission" if cumulative else "run", "previous_run_applied": previous_run_applied}
 
+    def change_totals(self, run_id: str) -> Optional[Dict[str, int]]:
+        """How much a finished chain of milestones would change in the project: files, and lines added and removed.
+        For the operator's information only. The per-step caps stay the enforced limit; a mission of several steps
+        can add up to more, and this is where that becomes visible. None when nothing differs or it cannot be read."""
+        try:
+            tree = self.tree_manifest(run_id, cumulative=True)
+        except Exception:
+            return None
+        if not tree.get("ok") or not tree.get("manifest"):
+            return None
+        proj_root = Path((self.sm.get_run(run_id) or {}).get("project_path") or "").resolve()
+        added = removed = new_files = 0
+        for item in tree["manifest"]:
+            new_files += item["type"] == "A"
+            more, less = self._line_delta(proj_root / item["path"], Path(item["source"]))
+            added, removed = added + more, removed + less
+        return {"files": len(tree["manifest"]), "new_files": new_files, "added": added, "removed": removed}
+
+    @staticmethod
+    def _line_delta(old: Path, new: Path) -> Tuple[int, int]:
+        """(lines added, lines removed) going from old to new. A binary or unreadable file counts as (0, 0): it is
+        still counted as a file."""
+        try:
+            if not old.is_file():
+                data = new.read_bytes()
+                return (0, 0) if b"\0" in data else (len(data.decode("utf-8", errors="replace").splitlines()), 0)
+            r = subprocess.run(["git", "-c", "core.quotepath=false", "diff", "--no-index", "--numstat", "--",
+                                str(old), str(new)], capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=30)
+            fields = (r.stdout.splitlines() or [""])[0].split("\t")
+            return (int(fields[0]), int(fields[1])) if len(fields) >= 2 and fields[0].isdigit() and fields[1].isdigit() else (0, 0)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return 0, 0
+
     def apply_tree(self, run_id: str, request_id: str = "", applied_by: str = "HUMAN", on_conflict: str = "block", *, cumulative: bool = True) -> Dict[str, Any]:
         """Apply a mission chain or one run to the project: backup, copy, re-verify in the project, roll back on
         any failure. on_conflict: 'block' refuses when the user changed a file the AIs also changed; 'skip' leaves

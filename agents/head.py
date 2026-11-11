@@ -81,6 +81,9 @@ class BaseHead(ABC):
         """Goal-oriented step planning. Returns {'status': 'DONE'|'CONTINUE'|'BLOCKED', 'summary', 'reason',
         'order': ORDER|None}."""
         import json
+        from core import project_history
+        project_context = dict(project_context or {})
+        decisions = project_history.planning_block(project_context.pop("decision_history", None))
         prompt = (
             "You are HEAD, driving a multi-step development MISSION to completion on the user's behalf.\n"
             + self.PROXY_POLICY +
@@ -106,6 +109,7 @@ class BaseHead(ABC):
             + ("YOUR PREVIOUS ORDER WAS REJECTED:\n" + str(project_context["previous_plan_rejected"]) + "\n\n"
                if project_context.get("previous_plan_rejected") else "")
             + "MISSION GOAL:\n" + mission_goal + "\n\n"
+            + decisions +
             "STEPS SO FAR:\n" + json.dumps(history, ensure_ascii=False, default=str)[:40000] + "\n\n"
             "CURRENT PROJECT FILES:\n" + json.dumps(project_context, ensure_ascii=False, default=str)[:12000] + "\n\n"
             'Respond ONLY with JSON: {"status": "DONE"|"CONTINUE"|"BLOCKED", "summary": "what is done and what '
