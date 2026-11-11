@@ -20,7 +20,8 @@ class SolomonBridge:
                 error TEXT)''')
 
     def connect(self):
-        db = sqlite3.connect(str(self.d.resolve_db_path()), timeout=15)
+        from core.db_path import connect
+        db = connect(self.d.resolve_db_path())
         db.row_factory = sqlite3.Row
         return db
 

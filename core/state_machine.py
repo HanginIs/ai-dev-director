@@ -45,7 +45,8 @@ class StateMachine:
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
+        from core.db_path import connect
+        conn = connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 

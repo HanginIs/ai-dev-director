@@ -20,6 +20,22 @@ def get_db_path() -> Path:
     return DEFAULT_DB_PATH
 
 
+def connect(path=None, timeout: float = 30.0):
+    """Every Director connection to the SQLite DB. Missions, the console and the bridge write from several threads
+    at once; with the default rollback journal and no wait, a busy DB once failed whole mission steps ("database
+    disk image is malformed" twice on 2026-11-10). WAL lets readers and one writer work together, and a writer waits
+    up to `timeout` seconds for another instead of failing at once."""
+    import sqlite3
+    conn = sqlite3.connect(str(path or get_db_path()), timeout=timeout)
+    conn.execute(f"PRAGMA busy_timeout = {int(timeout * 1000)}")
+    try:
+        if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+            conn.execute("PRAGMA journal_mode = WAL")      # persistent in the DB file; a no-op once set
+    except sqlite3.DatabaseError:
+        pass                                               # another process is switching it right now: keep going
+    return conn
+
+
 def get_lock_dir() -> Path:
     """Directory for cross-process lock files (next to the DB; isolated under TEST_DB_PATH in tests)."""
     return get_db_path().parent / "locks"

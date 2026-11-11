@@ -1,5 +1,6 @@
 """Prepare local projects without staging or committing the user's working copy."""
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -43,7 +44,17 @@ def prepare_project(path):
     if root == Path(root.anchor) or root == Path.home() or root == SOURCE_ROOT or SOURCE_ROOT in root.parents or root in SOURCE_ROOT.parents:
         raise ValueError('프로젝트 루트로 사용할 수 없는 광범위/제어 경로입니다')
     root.mkdir(parents=True, exist_ok=True)
-    if not (root / '.git').exists(): git(root, 'init')
+    if not (root / '.git').exists():
+        # A folder inside another repository (a monorepo subfolder, or any folder under a parent that is a repo)
+        # must not get a second, nested repository: the outer repo would then see an embedded repo instead of
+        # files, and every git command in subfolders resolves to the wrong one. Target the repository root instead.
+        top = subprocess.run(['git', 'rev-parse', '--show-toplevel'], cwd=str(root), capture_output=True,
+                             text=True, encoding='utf-8', errors='replace', timeout=30)
+        if top.returncode == 0 and top.stdout.strip():
+            outer = Path(top.stdout.strip()).resolve()
+            raise ValueError(f'이 폴더는 이미 git 저장소({outer}) 안에 있습니다. 새 저장소를 만들지 않으니 '
+                             f'저장소 루트({outer})를 프로젝트로 지정하세요')
+        git(root, 'init')
     try: git(root, 'rev-parse', '--verify', 'HEAD')
     except ValueError:
         tree = git(root, 'mktree')
@@ -121,9 +132,19 @@ def _has_pytest_config(root):
             or '[tool:pytest]' in _read(root / 'setup.cfg'))
 
 
+def _child(root, name):
+    """root/name only when a child is spelled exactly `name`. On a case-insensitive disk (the macOS default)
+    Path('tests').is_dir() is also true for a Swift 'Tests' folder, which once sent pytest at Swift sources."""
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return None
+    return root / name if name in names else None
+
+
 def _has_python_tests(root):
-    tests = root / 'tests'          # on a case-insensitive disk this also matches a Swift 'Tests' folder
-    if not tests.is_dir():
+    tests = _child(root, 'tests')
+    if tests is None or not tests.is_dir():
         return False
     try:
         return any(tests.rglob('test_*.py')) or any(tests.rglob('*_test.py'))
@@ -152,7 +173,24 @@ def detect_test_command(project):
             script = ''
         if script and 'no test specified' not in script:
             return ['npm', 'test']
+    for folder in ('Tests', 'tests', 'test'):                 # a project-provided runner, e.g. Tests/run.sh
+        directory = _child(root, folder)
+        if directory is not None and (directory / 'run.sh').is_file():
+            return ['bash', f'{folder}/run.sh']
+    makefile = _child(root, 'Makefile')
+    if makefile is not None and re.search(r'(?m)^test\s*:', _read(makefile)):
+        return ['make', 'test']
     return None
+
+
+def resolve_test_command(command, tree):
+    """The command to run in `tree` (a worktree, or the project when applying). The default command means "whatever
+    this tree supports": a greenfield project gets its tests/ only from the Builder, so the choice is made here, in
+    the tree being verified. When nothing is detected nothing runs (verification NOT_RUN) instead of a pytest that
+    cannot pass: exit 4/5 on every milestone once burned whole missions."""
+    if command != DEFAULT_TEST_COMMAND:
+        return command
+    return detect_test_command(tree)
 
 
 def configure_runtime(config, project):

@@ -52,6 +52,11 @@ def fake_run(proj, run_id, base_ref, base_worktree=None, evidence_ok=True, state
     return Path(wt)
 
 
+def reviewed(rid):
+    """What the orchestrator does when a run reaches PASS: remember the files the review passed."""
+    assert ResultManager().record_review(rid)
+
+
 @pytest.fixture
 def cleanup_runs():
     made = []
@@ -87,6 +92,7 @@ def test_apply_tree_delivers_into_the_project_and_blocks_on_conflicts(tmp_path, 
     (wt / "new.py").write_text("new = 1\n", encoding="utf-8")
     (wt / "b.py").write_text("b = 2\n", encoding="utf-8")
     (proj / "b.py").write_text("b = 99\n", encoding="utf-8")
+    reviewed(rid)
     rm = ResultManager(config={"verification": {"test_command": None}})
     blocked = rm.apply_tree(rid, request_id="dlv2-a")
     assert blocked["status"] == "blocked" and any("Conflicts" in b for b in blocked["blocks"])
@@ -108,6 +114,7 @@ def test_milestone_chain_resolves_to_the_project_snapshot_it_started_from(tmp_pa
     base2 = snapshot(str(wt1))                                                # milestone 2 builds on milestone 1
     wt2 = fake_run(proj, r2, base2, base_worktree=str(wt1))
     (wt2 / "new.py").write_text("new = 1\n", encoding="utf-8")                # milestone 2's change
+    reviewed(r2)
     rm = ResultManager()
     assert rm.origin_ref(r2) == base
     kinds = {m["path"]: m["type"] for m in rm.tree_manifest(r2)["manifest"]}
@@ -135,6 +142,7 @@ def test_apply_rechecks_the_exact_preexisting_failure(tmp_path, cleanup_runs, mo
     cleanup_runs.append(rid)
     wt = fake_run(proj, rid, snapshot(str(proj)))
     (wt / "a.py").write_text("a = 2\n", encoding="utf-8")
+    reviewed(rid)
     rm = ResultManager()
     evidence = rm._load(rid, "final_evidence.json")
     evidence["baseline"] = "PREEXISTING_FAILURES"
@@ -158,6 +166,149 @@ def test_apply_tree_requires_full_pass_evidence(tmp_path, cleanup_runs):
     (wt / "a.py").write_text("a = 2\n", encoding="utf-8")
     res = ResultManager().apply_tree(rid, request_id="dlv4")
     assert res["status"] == "blocked" and any("final_evidence" in b for b in res["blocks"])
+
+
+def test_apply_refuses_a_worktree_changed_after_review(tmp_path, cleanup_runs):
+    proj = project(tmp_path)
+    rid = "RUN-TEST-DLV-DRIFT"; cleanup_runs.append(rid)
+    wt = fake_run(proj, rid, snapshot(str(proj)))
+    (wt / "a.py").write_text("a = 2\n", encoding="utf-8")
+    (wt / "new.py").write_text("new = 1\n", encoding="utf-8")
+    reviewed(rid)
+    rm = ResultManager(config={"verification": {"test_command": None}})
+    assert all(rm.tree_preconditions(rid, cumulative=scope)["ok"] for scope in (True, False))
+
+    (wt / "a.py").write_text("a = 3  # edited after the review\n", encoding="utf-8")
+    for scope in (True, False):                                   # a whole mission and a single run alike
+        pre = rm.tree_preconditions(rid, cumulative=scope)
+        assert not pre["ok"] and any("changed after the review" in b and "changed: a.py" in b for b in pre["blocks"])
+    assert rm.apply_tree(rid, request_id="drift-1")["status"] == "blocked"
+    assert (proj / "a.py").read_text(encoding="utf-8") == "a = 1\n" and not (proj / "new.py").exists()
+
+    (wt / "a.py").write_text("a = 2\n", encoding="utf-8")          # back to what was reviewed
+    (wt / "extra.py").write_text("x = 1\n", encoding="utf-8")      # but a file appeared later
+    assert any("added: extra.py" in b for b in rm.tree_preconditions(rid)["blocks"])
+    (wt / "extra.py").unlink()
+    (wt / "new.py").unlink()                                       # or a reviewed file disappeared
+    assert any("removed: new.py" in b for b in rm.tree_preconditions(rid)["blocks"])
+    (wt / "new.py").write_text("new = 1\n", encoding="utf-8")
+
+    (wt / "__pycache__").mkdir()                                   # caches are not deliverables: no drift
+    (wt / "__pycache__" / "a.cpython-39.pyc").write_bytes(b"cache")
+    done = rm.apply_tree(rid, request_id="drift-2")
+    assert done["status"] == "applied" and sorted(done["files"]) == ["a.py", "new.py"]
+
+
+def test_apply_refuses_a_run_without_a_review_record(tmp_path, cleanup_runs):
+    proj = project(tmp_path)
+    rid = "RUN-TEST-DLV-NOREC"; cleanup_runs.append(rid)
+    wt = fake_run(proj, rid, snapshot(str(proj)))
+    (wt / "a.py").write_text("a = 2\n", encoding="utf-8")
+    rm = ResultManager(config={"verification": {"test_command": None}})
+    res = rm.apply_tree(rid, request_id="norec")
+    assert res["status"] == "blocked" and any("No record of the reviewed files" in b for b in res["blocks"])
+    assert not rm.result_preconditions(rid)["ok"]
+    assert (proj / "a.py").read_text(encoding="utf-8") == "a = 1\n"
+
+
+def test_a_file_the_user_deleted_is_a_conflict_for_a_run_and_for_a_mission(tmp_path, cleanup_runs):
+    proj = project(tmp_path)
+    rid = "RUN-TEST-DLV-USERDEL"; cleanup_runs.append(rid)
+    wt = fake_run(proj, rid, snapshot(str(proj)))
+    (wt / "a.py").write_text("a = 2\n", encoding="utf-8")         # the AIs changed a.py ...
+    (wt / "new.py").write_text("new = 1\n", encoding="utf-8")
+    reviewed(rid)
+    (proj / "a.py").unlink()                                       # ... while the user deleted it
+    rm = ResultManager(config={"verification": {"test_command": None}})
+    for scope in (True, False):
+        pre = rm.tree_preconditions(rid, cumulative=scope)
+        assert not pre["ok"] and [c["path"] for c in pre["conflicts"]] == ["a.py"]
+        assert "a.py" not in [m["path"] for m in pre["manifest"]]
+    assert rm.apply_tree(rid, request_id="userdel-block")["status"] == "blocked"
+    assert not (proj / "a.py").exists()
+    done = rm.apply_tree(rid, request_id="userdel-skip", on_conflict="skip")   # apply the rest, keep the deletion
+    assert done["status"] == "applied" and done["files"] == ["new.py"]
+    assert not (proj / "a.py").exists() and (proj / "new.py").exists()
+
+
+def _mission_with(store, proj, wt, rid, final_state="PASS", applied=None):
+    from core.mission import MissionRunner
+    from schemas.order import OrderSchema
+    m = MissionRunner(lambda: None, store).create(str(proj), "g", OrderSchema(goal="g", allowed_paths=["a.py"]), config={})
+    m.update(status="DONE", base_worktree=str(wt), applied=applied)
+    m["steps"][0].update(run_id=rid, result={"final_state": final_state, "worktree_path": str(wt)})
+    store.save(m)
+    return m
+
+
+def test_a_follow_up_continues_only_from_a_deliverable_the_project_has_not_moved_past(tmp_path, cleanup_runs):
+    from core.mission import MissionStore, latest_deliverable
+    proj = project(tmp_path)
+    rid = "RUN-TEST-DLV-FOLLOW"; cleanup_runs.append(rid)
+    wt = fake_run(proj, rid, snapshot(str(proj)))
+    store = MissionStore(tmp_path / "missions")
+    m = _mission_with(store, proj, wt, rid)
+    assert latest_deliverable(str(proj), store) == str(wt)        # the project is where the mission started
+
+    m["applied"] = {"status": "applied"}; store.save(m)          # already in the project: start from the project
+    assert latest_deliverable(str(proj), store) is None
+    m["applied"] = None; store.save(m)
+
+    (proj / "b.py").write_text("b = 2  # released meanwhile\n", encoding="utf-8")
+    git(proj, "commit", "-qam", "newer work")                    # the project moved on: the deliverable is older
+    assert latest_deliverable(str(proj), store) is None
+
+
+def test_a_follow_up_never_continues_from_a_failed_attempt(tmp_path, cleanup_runs):
+    from core.mission import MissionStore, latest_deliverable
+    proj = project(tmp_path)
+    rid = "RUN-TEST-DLV-FAILED"; cleanup_runs.append(rid)
+    wt = fake_run(proj, rid, snapshot(str(proj)), state=State.FAIL)
+    store = MissionStore(tmp_path / "missions")
+    m = _mission_with(store, proj, wt, rid, final_state="FAIL")
+    m["status"] = "STOPPED"; store.save(m)
+    assert latest_deliverable(str(proj), store) is None
+
+
+def test_mission_done_without_a_passed_milestone_is_incomplete_and_one_message_reports_the_apply(tmp_path):
+    from core.mission import MissionRunner, MissionStore
+    from schemas.order import OrderSchema
+    sent = []
+    store = MissionStore(tmp_path / "missions")
+    runner = MissionRunner(lambda: None, store, notify=lambda text, run_id=None, role="SYSTEM": sent.append((role, text)))
+    m = runner.create(str(tmp_path / "p"), "g", OrderSchema(goal="g", allowed_paths=["a.py"]), config={})
+    m["steps"][0].update(run_id="RUN-X", result={"final_state": "FAIL", "worktree_path": None})
+    done = runner._finish(m, "DONE", summary="audit written")
+    assert done["status"] == "INCOMPLETE" and "no milestone passed" in done["blocked_reason"]
+    assert len(sent) == 1 and "미션 중단" in sent[0][1]
+
+
+def test_an_unfixable_verification_twice_in_a_row_ends_the_mission():
+    from core.mission import _repeated_unfixable_verification
+    def step(code, command="python -m pytest tests/", state="FAIL"):
+        return {"result": {"final_state": state, "verify_exit": code, "verify_command": command}}
+    assert "exit 4" in _repeated_unfixable_verification([step(4), step(4)])
+    assert _repeated_unfixable_verification([step(1), step(1)]) is None        # a failing test can be fixed
+    assert _repeated_unfixable_verification([step(4), step(5)]) is None        # different reasons: keep going
+    assert _repeated_unfixable_verification([step(4)]) is None
+    assert _repeated_unfixable_verification([step(127, "swift test"), step(127, "swift test")])
+
+
+def test_an_unverified_result_is_applied_only_by_a_person(tmp_path, cleanup_runs):
+    proj = project(tmp_path)
+    rid = "RUN-TEST-DLV-NOTRUN"; cleanup_runs.append(rid)
+    wt = fake_run(proj, rid, snapshot(str(proj)))
+    (wt / "a.py").write_text("a = 2\n", encoding="utf-8")
+    reviewed(rid)
+    rm = ResultManager(config={"verification": {"test_command": None}})
+    ev = rm._load(rid, "final_evidence.json")
+    ev.update(verification="NOT_RUN", regression="NOT_RUN")
+    rm._save(rid, "final_evidence.json", ev)
+    auto = rm.apply_tree(rid, request_id="notrun-auto", applied_by="DIRECTOR_AUTO")
+    assert auto["status"] == "blocked" and any("NOT_RUN" in b for b in auto["blocks"])
+    assert (proj / "a.py").read_text(encoding="utf-8") == "a = 1\n"
+    assert rm.result_preconditions(rid)["ok"]                    # the console lets a person decide
+    assert rm.apply_tree(rid, request_id="notrun-human", applied_by="HUMAN")["status"] == "applied"
 
 
 def test_profiles_and_tags():

@@ -75,7 +75,8 @@ def reported_tokens(provider: str, stdout: str, stderr: str) -> Optional[Dict[st
 
 def _conn() -> sqlite3.Connection:
     from core.db_path import get_db_path
-    conn = sqlite3.connect(str(get_db_path()), timeout=10)
+    from core.db_path import connect
+    conn = connect(get_db_path())
     conn.row_factory = sqlite3.Row
     conn.execute("""CREATE TABLE IF NOT EXISTS ai_usage (
         id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT NOT NULL, ended_at TEXT, status TEXT NOT NULL,

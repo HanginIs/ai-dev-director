@@ -128,6 +128,10 @@ class Verifier:
         # Test must pass (if executed)
         # Lint must pass (if executed)
         overall_passed = build_res["passed"] and test_res["passed"] and lint_res["passed"]
+        # `passed` stays True when nothing ran (callers that only need "nothing failed" keep working), but `status`
+        # says what actually happened, so evidence never presents an unverified result as verified.
+        executed_any = bool(build_res["executed"] or test_res["executed"] or lint_res["executed"])
+        status = "NOT_RUN" if not executed_any else ("PASS" if overall_passed else "FAIL")
 
         summary_parts = []
         if build_res["executed"]:
@@ -144,6 +148,8 @@ class Verifier:
 
         return {
             "passed": overall_passed,
+            "status": status,
+            "executed_any": executed_any,
             "summary": summary,
             "build": build_res,
             "test": test_res,

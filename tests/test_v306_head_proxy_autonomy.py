@@ -675,7 +675,9 @@ def test_repo_relative_reference_paths_are_dropped_absolute_kept(tmp_path):
     assert order.reference_paths == [str(doc)] and any("reference_paths" in n for n in notes)
 
 
-def test_follow_up_mission_continues_from_the_last_deliverable(tmp_path):
+def test_follow_up_mission_does_not_continue_from_an_unverifiable_deliverable(tmp_path):
+    # The positive case (a deliverable whose starting commit is still the project's HEAD) is covered with a real
+    # repository in test_v312_delivery. Here the chain cannot be checked, so the project is the starting point.
     from core.mission import latest_deliverable
     store = MissionStore(tmp_path / "missions")
     runner = MissionRunner(lambda: None, store)
@@ -683,12 +685,11 @@ def test_follow_up_mission_continues_from_the_last_deliverable(tmp_path):
     deliverable = tmp_path / "proj" / ".director_worktrees" / "RUN-OLD"
     deliverable.mkdir(parents=True)
     old.update(status="DONE", base_worktree=str(deliverable))
+    old["steps"][0].update(run_id="RUN-OLD", result={"final_state": "PASS", "worktree_path": str(deliverable)})
     store.save(old)
-    assert latest_deliverable(str(tmp_path / "proj"), store) == str(deliverable)
+    assert latest_deliverable(str(tmp_path / "proj"), store) is None
     new = runner.create(str(tmp_path / "proj"), "now add export", OrderSchema(**ORDER), config={})
-    assert new["base_worktree"] == new["continued_from"] == str(deliverable)
-    fresh = runner.create(str(tmp_path / "other"), "x", OrderSchema(**ORDER), config={})
-    assert fresh["base_worktree"] is None
+    assert new["base_worktree"] is None
 
 
 def test_verification_does_not_inherit_the_directors_io_encoding(tmp_path, monkeypatch):

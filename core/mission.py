@@ -82,14 +82,77 @@ def _same_path(a: str, b: str) -> bool:
         return str(a).lower() == str(b).lower()
 
 
+def _git_out(cwd: str, *args: str) -> Optional[str]:
+    import subprocess
+    try:
+        r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def _project_unchanged_since(project_path: str, worktree: str) -> bool:
+    """True only when the project's HEAD is still the commit the deliverable's chain of milestones started from.
+    Anything else (new commits, an unreadable chain, a folder that is not a repository) means the deliverable may
+    be older than the project, and building on it would quietly undo the newer work."""
+    try:
+        from core.result_manager import ResultManager
+        origin = ResultManager().origin_ref(Path(worktree).name)
+    except Exception:
+        return False
+    if not origin:
+        return False
+    started_at = _git_out(project_path, "rev-parse", f"{origin}^")
+    head = _git_out(project_path, "rev-parse", "HEAD")
+    return bool(started_at and head and started_at == head)
+
+
 def latest_deliverable(project_path: str, store: Optional["MissionStore"] = None) -> Optional[str]:
-    """The newest existing worktree a previous mission on this project delivered (last PASSED milestone). Nothing is
-    merged into the user's project automatically, so follow-up requests continue from here instead of from scratch."""
+    """The worktree a follow-up mission on this project continues from, or None to start from the project itself.
+
+    Only a deliverable that passed review and verification (never a failed attempt a stopped mission left behind),
+    that was not already applied to the project, and whose starting commit is still the project's HEAD qualifies.
+    Otherwise the project is the newer, safer starting point."""
     store = store or MissionStore()
-    found = [m for m in store.all() if m.get("base_worktree") and _same_path(m.get("project_path", ""), project_path)
-             and m.get("status") != "RUNNING" and Path(m["base_worktree"]).is_dir()]
+    found = []
+    for m in store.all():
+        wt = m.get("base_worktree")
+        if not wt or not _same_path(m.get("project_path", ""), project_path) or m.get("status") == "RUNNING":
+            continue
+        if not Path(wt).is_dir() or not deliverable_run_id(m):
+            continue
+        if (m.get("applied") or {}).get("status") == "applied":
+            continue
+        found.append(m)
     found.sort(key=lambda m: m.get("updated_at", ""))
-    return found[-1]["base_worktree"] if found else None
+    if not found or not _project_unchanged_since(project_path, found[-1]["base_worktree"]):
+        return None
+    return found[-1]["base_worktree"]
+
+
+# pytest: 4 = usage error (e.g. the tests/ path does not exist), 5 = no tests collected; shells: 126/127 = the
+# command cannot run or does not exist. The verification command is the Director's, so a Builder cannot fix these.
+UNFIXABLE_VERIFY_EXITS = {4, 5, 126, 127}
+
+
+def _unfixable_verification(result: Dict[str, Any]) -> Optional[str]:
+    if not result or result.get("final_state") == State.PASS:
+        return None
+    code, command = result.get("verify_exit"), result.get("verify_command")
+    if command and code in UNFIXABLE_VERIFY_EXITS:
+        return f"{command} (exit {code})"
+    return None
+
+
+def _repeated_unfixable_verification(steps: List[Dict[str, Any]]) -> Optional[str]:
+    if len(steps) < 2:
+        return None
+    last, before = (_unfixable_verification(s.get("result") or {}) for s in (steps[-1], steps[-2]))
+    if not last or last != before:
+        return None
+    return (f"the verification command failed the same way on two milestones in a row: {last}. No Builder can fix "
+            "the Director's own verification command; set this project's test command in config.local.yaml "
+            "(projects -> verification -> test_command) and start the mission again")
 
 
 def deliverable_run_id(mission: Dict[str, Any]) -> Optional[str]:
@@ -245,6 +308,11 @@ class MissionRunner:
         if len(mission["steps"]) >= total:
             return self._finish(mission, "INCOMPLETE", summary=plan.get("summary", ""),
                                 blocked=f"step budget ({total}) used; next step was: {plan['order'].get('goal', '')}")
+        # A verification that fails for a reason no Builder can fix (pytest finding no tests, a missing command)
+        # repeats on every milestone, whatever HEAD plans. Two in a row end the mission with the fix to make.
+        stuck = _repeated_unfixable_verification(mission["steps"])
+        if stuck:
+            return self._finish(mission, "FAILED", summary=plan.get("summary", ""), blocked=stuck)
         # Consecutive failures end a mission - but an attempt HEAD chose to build on is progress, not a dead end
         # (the step budget still bounds the mission).
         streak, steps = 0, mission["steps"]
@@ -377,6 +445,7 @@ class MissionRunner:
             "run_id": run_id, "final_state": row.get("current_state"), "worktree_path": row.get("worktree_path"),
             "stop_detail": ((trans[-1].get("details") if trans else "") or "")[:1500],
             "tests": ver.get("test_counts"), "verification": (ver.get("summary") or "")[:600],
+            "verify_command": (ver.get("test") or {}).get("command"), "verify_exit": (ver.get("test") or {}).get("exit_code"),
             "review_verdict": rev.get("verdict"),
             "review_findings": (list(rev.get("p0") or []) + list(rev.get("p1") or []) + list(rev.get("p2") or []))[:10],
             "head_rationale": (dec.get("rationale") or "")[:1200],
@@ -399,11 +468,15 @@ class MissionRunner:
         return ", ".join(parts)
 
     def _finish(self, mission: Dict[str, Any], status: str, summary: str = "", blocked: Optional[str] = None):
+        passed = sum(1 for s in mission["steps"] if (s.get("result") or {}).get("final_state") == State.PASS)
+        if status == "DONE" and passed == 0:
+            # HEAD may judge the goal met, but nothing passed review and verification: nothing is delivered.
+            status = "INCOMPLETE"
+            blocked = "HEAD declared the goal met, but no milestone passed review and verification"
         mission["status"] = status
         mission["summary"] = summary or mission.get("summary", "")
         mission["blocked_reason"] = blocked
         self.store.save(mission)
-        passed = sum(1 for s in mission["steps"] if (s.get("result") or {}).get("final_state") == State.PASS)
         where = mission.get("base_worktree") or "(아직 통과한 단계 없음)"
         head_line = {"DONE": "미션 완료", "BLOCKED": "미션 보류 - 사용자 결정 필요",
                      "INCOMPLETE": "미션 중단 - 단계 예산 소진 또는 계획 불가", "FAILED": "미션 실패"}[status]
@@ -411,17 +484,21 @@ class MissionRunner:
                 f"목표: {mission['goal'][:300]}\n{mission['summary'][:1500]}\n결과물 위치(작업본): {where}")
         if blocked:
             text += f"\n사유: {blocked[:600]}"
+        # Apply first, so the one final message says whether the project now holds the result.
+        applied_line = self._auto_apply(mission)
+        if applied_line:
+            text += "\n" + applied_line
         self.notify(text, run_id=mission["steps"][-1].get("run_id"), role="HEAD")
-        self._auto_apply(mission)
         return mission
 
-    def _auto_apply(self, mission: Dict[str, Any]) -> None:
-        """Deliver the finished work into the project when the mission's policy says so. Only PASSED milestones
-        are ever applied; a conflict with the user's own edits blocks instead of overwriting."""
+    def _auto_apply(self, mission: Dict[str, Any]) -> Optional[str]:
+        """Deliver the finished work into the project when the mission's policy says so, and return the line that
+        reports it. Only PASSED milestones are ever applied; a conflict with the user's own edits blocks instead of
+        overwriting."""
         policy = mission.get("auto_apply") or "off"
         rid = deliverable_run_id(mission)
         if policy == "off" or not rid or (policy == "on_done" and mission["status"] != "DONE"):
-            return
+            return None
         try:
             from core.result_manager import ResultManager
             orch = self.factory()
@@ -432,12 +509,11 @@ class MissionRunner:
         mission["applied"] = {"run_id": rid, "at": _now(), **{k: v for k, v in result.items() if k != "request_id"}}
         self.store.save(mission)
         if result.get("status") == "applied":
-            self.notify(f"결과물을 프로젝트에 적용했습니다: {len(result.get('files', []))}개 파일 "
-                        f"({mission['project_path']}). 적용 후 테스트: {result.get('verification')}", run_id=rid)
-        else:
-            why = "; ".join(result.get("blocks") or []) or result.get("reason") or result.get("error") or result.get("status")
-            self.notify(f"결과물을 자동 적용하지 않았습니다 ({result.get('status')}): {str(why)[:400]}. "
-                        f"작업본: {mission.get('base_worktree')}", run_id=rid)
+            return (f"결과물을 프로젝트에 적용했습니다: {len(result.get('files', []))}개 파일 "
+                    f"({mission['project_path']}). 적용 후 테스트: {result.get('verification')}")
+        why = "; ".join(result.get("blocks") or []) or result.get("reason") or result.get("error") or result.get("status")
+        return (f"결과물을 자동 적용하지 않았습니다 ({result.get('status')}): {str(why)[:400]}. "
+                f"작업본: {mission.get('base_worktree')}")
 
 
 class _NullLogger:
@@ -460,6 +536,30 @@ def finalize_stopped_runs(mission: Dict[str, Any], sm) -> List[str]:
         if row and row["current_state"] not in TERMINAL_STATES:
             sm.transition_to(rid, State.FAIL, details="MISSION_STOPPED: " + (mission.get("blocked_reason") or "operator stopped mission"))
             closed.append(rid)
+    return closed
+
+
+def finalize_orphaned_runs(store: Optional[MissionStore] = None, sm=None) -> List[str]:
+    """Server start: a mission that is no longer RUNNING but still names an owner process that is gone (the app or
+    server was quit while it worked) never ran its own cleanup, so its last run stayed BUILDING/VERIFYING forever.
+    Close those runs as the worker would have, and release the owner."""
+    from core.state_machine import StateMachine
+    store = store or MissionStore()
+    sm = sm or StateMachine()
+    closed: List[str] = []
+    for m in store.all():
+        owner = m.get("owner_pid")
+        if m.get("status") == "RUNNING" or not owner or _pid_alive(owner):
+            continue
+        for step in m.get("steps", []):
+            rid = step.get("run_id")
+            row = sm.get_run(rid) if rid else None
+            if row and row["current_state"] not in TERMINAL_STATES:
+                reason = m.get("blocked_reason") or f"mission {m.get('status')}"
+                sm.transition_to(rid, State.FAIL, details=f"ORPHANED_RUN_CLOSED: worker process {owner} is gone ({reason})")
+                closed.append(rid)
+        m["owner_pid"] = None
+        store.save(m, force=True)
     return closed
 
 

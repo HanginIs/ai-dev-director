@@ -138,7 +138,8 @@ def resolve_db_path() -> Path:
 
 
 def get_db_conn():
-    conn = sqlite3.connect(str(resolve_db_path()))
+    from core.db_path import connect
+    conn = connect(resolve_db_path())
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -893,7 +894,14 @@ def stop_missions(reason: str = "", mission_id: Optional[str] = None, by: str = 
     store = MissionStore()
     targets = [m for m in store.all() if m.get("status") == "RUNNING" and (not mission_id or m["mission_id"] == mission_id)]
     stopped = [stop_request(m["mission_id"], reason, by, store)["mission_id"] for m in targets]
-    killed = ProcessTreeRunner.kill_active() if stopped else []
+    killed = []
+    if stopped:
+        still_running = [m for m in store.all() if m.get("status") == "RUNNING"]
+        if mission_id and still_running:
+            # other missions keep working: kill only what the stopped mission started
+            killed = ProcessTreeRunner.kill_active(mission_id)
+        else:
+            killed = ProcessTreeRunner.kill_active()
     sid = active_session_id()
     if stopped:
         ChatManager().add_message(sid, "SYSTEM", f"[{by}] 작업 정지: 미션 {', '.join(stopped)} 정지 · 실행 중이던 AI 프로세스 {len(killed)}개 종료 · 기록과 작업본은 남습니다" + (f" · 사유: {reason[:200]}" if reason else ""))

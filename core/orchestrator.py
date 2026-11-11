@@ -659,6 +659,8 @@ class Orchestrator:
         under test writing its data file, report output, ...) are recorded as verification artifacts: they are the
         product's runtime output, not Builder changes, and must not later read as out-of-scope Builder edits."""
         build_cmd, test_cmd, lint_cmd = self._verification_cmds()
+        from core.bootstrap import resolve_test_command
+        test_cmd = resolve_test_command(test_cmd, worktree_path)
         before = self._dirty_state(worktree_path) if self._proxy() else None
         result = Verifier.verify(worktree_path=worktree_path, build_cmd=build_cmd, test_cmd=test_cmd, lint_cmd=lint_cmd,
                                  timeout=self._verification_timeout())
@@ -1164,9 +1166,13 @@ class Orchestrator:
         elif not verification.get("passed", False):
             ev["verification"] = "FAIL"
             ev["reasons"].append("VERIFICATION_FAILED")
+        elif verification.get("status") == "NOT_RUN":
+            # Nothing was built or tested. The run may still pass review, but it is not verified: the result is
+            # never applied automatically (see ResultManager), only by a person who decides to.
+            ev["verification"] = "NOT_RUN"
         else:
             ev["verification"] = "PASS"
-        ev["regression"] = "MISSING"
+        ev["regression"] = "NOT_RUN" if ev["verification"] == "NOT_RUN" else "MISSING"
         if ev["baseline"] in ("PASS", "PREEXISTING_FAILURES") and ev["verification"] == "PASS":
             base_count = int((baseline.get("test_counts") or {}).get("passed", 0) or 0)
             post_count = int((verification.get("test_counts") or {}).get("passed", 0) or 0)
@@ -1284,6 +1290,13 @@ class Orchestrator:
                 ResultManager(self.sm, self.config).record_summary(run_id)
             except Exception as e:
                 logger.warning(f"result summary not persisted: {e}")
+            # remember exactly what the review passed; applying refuses anything else
+            try:
+                from core.result_manager import ResultManager
+                if not ResultManager(self.sm, self.config).record_review(run_id, worktree_path):
+                    logger.warning("reviewed files not recorded; this result cannot be applied until it is reviewed again")
+            except Exception as e:
+                logger.warning(f"reviewed files not recorded: {e}")
         return self._build_run_summary(run_id=run_id, order=order, builder_result=builder_result, verification=verification,
                                        review_result=review_result, decision=decision)
 

@@ -336,6 +336,16 @@ class ResultManager:
         return {"status": "ok", "path": path}
 
     # ------------------------------------------------------------------ preconditions + manifest
+    def _evidence_block(self, run_id: str, allow_not_run: bool) -> Optional[str]:
+        """Why the run's evidence does not allow applying it, or None. A run nothing was built or tested for
+        (verification NOT_RUN) is only applied by a person who chooses to, never automatically."""
+        ev = self._load(run_id, "final_evidence.json") or {}
+        if ev.get("verification") == "NOT_RUN" and not ev.get("reasons") and ev.get("reviewer_verdict") == "pass" \
+                and ev.get("canonical_containment") == "PASS":
+            return None if allow_not_run else ("No build or test command ran for this result (verification NOT_RUN); "
+                                               "it is not applied automatically")
+        return None if self._delivery_evidence_passes(run_id) else "final_evidence is missing or not fully PASS"
+
     def _delivery_evidence_passes(self, run_id: str) -> bool:
         ev = self._load(run_id, "final_evidence.json") or {}
         if (ev.get("reasons") or ev.get("canonical_containment") != "PASS"
@@ -350,11 +360,12 @@ class ResultManager:
                 and post.get("passed") is True)
 
     def result_preconditions(self, run_id: str) -> Dict[str, Any]:
+        """What the console shows before a person applies one run (a person may apply an unverified result)."""
         if self._load(run_id, "source_snapshot.json") is not None:
-            return self.tree_preconditions(run_id, cumulative=False)
-        return self.preconditions(run_id)
+            return self.tree_preconditions(run_id, cumulative=False, allow_not_run=True)
+        return self.preconditions(run_id, allow_not_run=True)
 
-    def preconditions(self, run_id: str) -> Dict[str, Any]:
+    def preconditions(self, run_id: str, allow_not_run: bool = False) -> Dict[str, Any]:
         blocks: List[str] = []
         run = self.sm.get_run(run_id)
         if not run:
@@ -365,8 +376,9 @@ class ResultManager:
         st = self.result_state(run_id).get("state")
         if st in (RESULT_APPLIED, RESULT_DISCARDED):
             blocks.append(f"Result already {st}")
-        if not self._delivery_evidence_passes(run_id):
-            blocks.append("final_evidence is missing or not fully PASS")
+        evidence_block = self._evidence_block(run_id, allow_not_run)
+        if evidence_block:
+            blocks.append(evidence_block)
         if not wt or not Path(wt).exists():
             blocks.append("Worktree missing")
         if not proj or not Path(proj).exists() or not (Path(proj) / ".git").exists():
@@ -374,6 +386,8 @@ class ResultManager:
         if wt and proj and Path(wt).exists() and Path(proj).exists() and not self.worktree_contained(proj, wt):
             blocks.append("Worktree canonical containment failed")
         manifest: List[Dict[str, Any]] = []
+        if not blocks:
+            blocks += self.review_drift(run_id, wt)
         if not blocks:
             order = self._load(run_id, "order.json") or {}
             changes = self.change_set(wt)
@@ -441,7 +455,7 @@ class ResultManager:
             _RECENT_APPLY_REQUESTS[rid] = "inflight"
             while len(_RECENT_APPLY_REQUESTS) > 500:
                 _RECENT_APPLY_REQUESTS.pop(next(iter(_RECENT_APPLY_REQUESTS)))
-        pre = self.preconditions(run_id)
+        pre = self.preconditions(run_id, allow_not_run=(applied_by == "HUMAN"))
         if not pre["ok"]:
             with _APPLY_LOCK:
                 _RECENT_APPLY_REQUESTS[rid] = "blocked"
@@ -533,6 +547,8 @@ class ResultManager:
         # verify in the main project with the same verifier
         v = self.config.get("verification", {}) or {}
         cmd = test_cmd if test_cmd is not None else v.get("test_command")
+        from core.bootstrap import resolve_test_command
+        cmd = resolve_test_command(cmd, str(proj_root))
         verification = Verifier.verify(worktree_path=str(proj_root), build_cmd=v.get("build_command"), test_cmd=cmd, lint_cmd=v.get("lint_command"), git_checks=False,
                                        timeout=verification_timeout(self.config))
         post = self._load(run_id, "verification.json") or {}
@@ -598,6 +614,69 @@ class ResultManager:
                 return snap.get("base_ref")
             rid = Path(base).name                          # a worktree is named after its run
         return None
+
+    # ------------------------------------------------------------------ what was reviewed is what gets applied
+    # When a run reaches PASS the Director records every file of its worktree (git blob ids). Applying refuses a
+    # worktree that no longer matches that record: a file edited, added or removed after the review was never
+    # reviewed. A run without the record (made before this check existed) has to be reviewed again.
+    REVIEW_RECORD = "reviewed_tree.json"
+
+    def _fingerprint_paths(self, wt_root: Path) -> Optional[List[str]]:
+        rc1, tracked, _ = _git(["ls-files", "-z"], str(wt_root))
+        rc2, others, _ = _git(["ls-files", "--others", "--exclude-standard", "-z"], str(wt_root))
+        if rc1 or rc2:
+            return None
+        paths = []
+        for rel in dict.fromkeys(filter(None, tracked.split("\0") + others.split("\0"))):
+            rel = rel.replace("\\", "/")
+            if SafetyPolicy.is_control_plane_path(rel) or rel.startswith(".director_worktrees/") or self.is_generated_path(rel):
+                continue
+            path = wt_root / rel
+            if path.is_file() and not path.is_symlink():
+                paths.append(rel)
+        return sorted(paths)
+
+    def worktree_fingerprint(self, worktree_path: str) -> Optional[Dict[str, str]]:
+        """{path: git blob id} for every deliverable file of the worktree, or None when it cannot be read."""
+        wt_root = Path(worktree_path).resolve()
+        if not wt_root.is_dir():
+            return None
+        paths = self._fingerprint_paths(wt_root)
+        if paths is None:
+            return None
+        ids = self._git_blob_ids(wt_root, paths)
+        if len(ids) != len(paths):
+            return None
+        return ids
+
+    def record_review(self, run_id: str, worktree_path: Optional[str] = None) -> bool:
+        """Remember exactly which files the final review passed. Called once, when the run reaches PASS."""
+        wt = worktree_path or (self.sm.get_run(run_id) or {}).get("worktree_path") or ""
+        files = self.worktree_fingerprint(wt) if wt else None
+        if files is None:
+            return False
+        rc, head, _ = _git(["rev-parse", "HEAD"], str(Path(wt).resolve()))
+        self._save(run_id, self.REVIEW_RECORD, {"run_id": run_id, "head": head.strip() if rc == 0 else None,
+                                                 "files": files, "recorded_at": datetime.utcnow().isoformat()})
+        return True
+
+    def review_drift(self, run_id: str, worktree_path: str) -> List[str]:
+        """Blocks when the worktree is not exactly what the final review passed (empty list when it is)."""
+        record = self._load(run_id, self.REVIEW_RECORD)
+        if not isinstance(record, dict) or not isinstance(record.get("files"), dict):
+            return ["No record of the reviewed files for this run; review it again before applying"]
+        current = self.worktree_fingerprint(worktree_path)
+        if current is None:
+            return ["Cannot read the worktree files to compare them with the review"]
+        reviewed = record["files"]
+        changed = sorted(p for p in set(current) & set(reviewed) if current[p] != reviewed[p])
+        added = sorted(set(current) - set(reviewed))
+        removed = sorted(set(reviewed) - set(current))
+        if not (changed or added or removed):
+            return []
+        parts = [f"{label}: {', '.join(paths[:8])}{' ...' if len(paths) > 8 else ''}"
+                 for label, paths in (("changed", changed), ("added", added), ("removed", removed)) if paths]
+        return ["Worktree changed after the review (" + "; ".join(parts) + "); review it again before applying"]
 
     @staticmethod
     def _git_blob_ids(root: Path, rels: List[str]) -> Dict[str, str]:
@@ -681,8 +760,10 @@ class ResultManager:
             else:
                 if origin_blob is not None and src_blob == origin_blob:
                     unchanged += 1; continue                 # the user deleted it meanwhile; not resurrected
-                if not cumulative and origin_blob is not None:
-                    conflicts.append({"path": rel, "reason": "removed in the project since the run started"}); continue
+                if origin_blob is not None:
+                    # The user deleted a file the AIs changed. Writing it back would undo the user's deletion, so it
+                    # is a conflict for a single run and for a whole mission alike.
+                    conflicts.append({"path": rel, "reason": "removed in the project since the work started"}); continue
                 kind = "A"
             data = src.read_bytes()
             manifest.append({"path": rel, "type": kind, "source": str(src), "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
@@ -692,7 +773,8 @@ class ResultManager:
         return {"ok": True, "blocks": [], "manifest": manifest, "conflicts": conflicts, "deleted": deleted,
                 "unchanged": unchanged, "origin_ref": origin}
 
-    def tree_preconditions(self, run_id: str, on_conflict: str = "block", *, cumulative: bool = True) -> Dict[str, Any]:
+    def tree_preconditions(self, run_id: str, on_conflict: str = "block", *, cumulative: bool = True,
+                           allow_not_run: bool = False) -> Dict[str, Any]:
         blocks: List[str] = []
         run = self.sm.get_run(run_id)
         if not run:
@@ -705,8 +787,9 @@ class ResultManager:
         previous_run_applied = cumulative and st == RESULT_APPLIED and result.get("apply_scope") == "run"
         if st in (RESULT_APPLIED, RESULT_DISCARDED) and not previous_run_applied:
             blocks.append(f"Result already {st}")
-        if not self._delivery_evidence_passes(run_id):
-            blocks.append("final_evidence is missing or not fully PASS")
+        evidence_block = self._evidence_block(run_id, allow_not_run)
+        if evidence_block:
+            blocks.append(evidence_block)
         if not wt or not Path(wt).exists():
             blocks.append("Worktree missing")
         if not proj or not Path(proj).exists() or not (Path(proj) / ".git").exists():
@@ -716,6 +799,8 @@ class ResultManager:
         with _APPLY_LOCK:
             if _project_key(proj) in _APPLY_INFLIGHT:
                 blocks.append("Another apply is in progress for this project")
+        if not blocks:
+            blocks += self.review_drift(run_id, wt)
         tree = self.tree_manifest(run_id, cumulative=cumulative) if not blocks else {"manifest": [], "conflicts": [], "deleted": [], "blocks": [], "origin_ref": None}
         blocks += tree.get("blocks", [])
         if tree["conflicts"] and on_conflict == "block":
@@ -737,7 +822,8 @@ class ResultManager:
             if rid in _RECENT_APPLY_REQUESTS:
                 return {"status": "duplicate", "run_id": run_id, "request_id": rid}
             _RECENT_APPLY_REQUESTS[rid] = "inflight"
-        pre = self.tree_preconditions(run_id, on_conflict=on_conflict, cumulative=cumulative)
+        pre = self.tree_preconditions(run_id, on_conflict=on_conflict, cumulative=cumulative,
+                                      allow_not_run=(applied_by == "HUMAN"))
         if not pre["ok"]:
             with _APPLY_LOCK:
                 _RECENT_APPLY_REQUESTS[rid] = "blocked"

@@ -10,7 +10,16 @@ import psutil
 logger = logging.getLogger("director.process_runner")
 
 _ACTIVE: Dict[int, str] = {}          # pid -> executable, for every CLI the runner currently has alive
+_OWNER: Dict[int, Optional[str]] = {}  # pid -> mission that started it (None when started outside a mission)
 _ACTIVE_LOCK = threading.Lock()
+
+
+def _current_mission() -> Optional[str]:
+    try:
+        from core import usage
+        return usage.context().get("mission_id")
+    except Exception:
+        return None
 
 
 def active_processes() -> Dict[int, str]:
@@ -63,10 +72,13 @@ class ProcessTreeRunner:
     blocked_real_cli_calls: List[List[str]] = []   # real-CLI launches refused under DIRECTOR_TESTING=1
 
     @classmethod
-    def kill_active(cls) -> List[int]:
-        """작업 정지: kill every CLI process the runner has alive (builder/reviewer/head). Returns the pids killed."""
+    def kill_active(cls, mission_id: Optional[str] = None) -> List[int]:
+        """작업 정지: kill the CLI processes the runner has alive (builder/reviewer/head) - all of them, or only those
+        a given mission started. Returns the pids killed."""
         killed = []
-        for pid in list(active_processes()):
+        with _ACTIVE_LOCK:
+            pids = [pid for pid in _ACTIVE if mission_id is None or _OWNER.get(pid) == mission_id]
+        for pid in pids:
             try:
                 if cls.kill_process_tree(pid):
                     killed.append(pid)
@@ -74,6 +86,7 @@ class ProcessTreeRunner:
                 logger.warning(f"kill_active: pid {pid}: {exc}")
             with _ACTIVE_LOCK:
                 _ACTIVE.pop(pid, None)
+                _OWNER.pop(pid, None)
         return killed
 
     @staticmethod
@@ -211,6 +224,7 @@ class ProcessTreeRunner:
         pid = process.pid
         with _ACTIVE_LOCK:
             _ACTIVE[pid] = str(argv[0])
+            _OWNER[pid] = _current_mission()
 
         if stdin_data is not None:
             try:
@@ -275,6 +289,7 @@ class ProcessTreeRunner:
         duration_sec = round(time.time() - start_time, 3)
         with _ACTIVE_LOCK:
             _ACTIVE.pop(pid, None)
+            _OWNER.pop(pid, None)
 
         if timed_out:
             # Terminate entire process tree using taskkill /PID <pid> /T /F

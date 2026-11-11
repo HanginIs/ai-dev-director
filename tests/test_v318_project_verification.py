@@ -21,10 +21,47 @@ def test_swift_package_with_test_targets_uses_swift_test(tmp_path):
     assert configure_runtime(_cfg(), tmp_path)["verification"]["test_command"] == ["swift", "test"]
 
 
-def test_swift_package_without_test_targets_keeps_default(tmp_path):
+def test_nothing_detected_runs_nothing_instead_of_a_pytest_that_cannot_pass(tmp_path):
+    from core.bootstrap import resolve_test_command
     (tmp_path / "Package.swift").write_text('targets: [.executableTarget(name: "Checks")]')
     assert detect_test_command(tmp_path) is None
+    # the project keeps the default; the tree being verified decides (a Builder may add tests/ to a greenfield)
     assert configure_runtime(_cfg(), tmp_path)["verification"]["test_command"] == DEFAULT_TEST_COMMAND
+    assert resolve_test_command(DEFAULT_TEST_COMMAND, tmp_path) is None
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_new.py").write_text("def test_x():\n    pass\n")
+    assert resolve_test_command(DEFAULT_TEST_COMMAND, tmp_path)[:4] == ["python", "-m", "pytest", "tests/"]
+    assert resolve_test_command(["swift", "test"], tmp_path) == ["swift", "test"]   # an explicit command is kept
+
+
+def test_a_project_runner_script_is_used(tmp_path):
+    (tmp_path / "Tests").mkdir()
+    (tmp_path / "Tests" / "run.sh").write_text("#!/bin/bash\nswiftc ...\n")
+    (tmp_path / "Tests" / "PolicyTests.swift").write_text("// swift\n")
+    assert detect_test_command(tmp_path) == ["bash", "Tests/run.sh"]
+
+
+def test_a_swift_tests_folder_is_never_taken_for_python_tests_on_any_disk(tmp_path):
+    (tmp_path / "Tests").mkdir()
+    (tmp_path / "Tests" / "test_helper.py").write_text("def test_x():\n    pass\n")   # even with a .py inside
+    assert detect_test_command(tmp_path) is None
+
+
+def test_a_makefile_test_target_is_used(tmp_path):
+    (tmp_path / "Makefile").write_text("build:\n\tcc x.c\n\ntest: build\n\t./run-tests\n")
+    assert detect_test_command(tmp_path) == ["make", "test"]
+    (tmp_path / "Makefile").write_text("build:\n\tcc x.c\n")
+    assert detect_test_command(tmp_path) is None
+
+
+def test_verification_reports_not_run_separately_from_pass(tmp_path):
+    from core.verifier import Verifier
+    nothing = Verifier.verify(str(tmp_path), git_checks=False)
+    assert nothing["status"] == "NOT_RUN" and nothing["executed_any"] is False
+    ran = Verifier.verify(str(tmp_path), test_cmd=["python", "-c", "print(1)"], git_checks=False)
+    assert ran["status"] == "PASS" and ran["executed_any"] is True
+    failed = Verifier.verify(str(tmp_path), test_cmd=["python", "-c", "raise SystemExit(1)"], git_checks=False)
+    assert failed["status"] == "FAIL" and failed["passed"] is False
 
 
 def test_swift_sources_in_tests_folder_are_not_python_tests(tmp_path):

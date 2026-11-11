@@ -1,5 +1,6 @@
 """Upgraded local console on 8081. Frozen 8080 is deliberately untouched."""
 import json
+import os
 import logging
 import re
 import secrets
@@ -304,8 +305,19 @@ def run():
     token_path = ROOT / 'data' / 'solomon-bridge.token'
     if not token_path.exists():
         token_path.write_text(secrets.token_urlsafe(48), encoding='utf-8')
+    try:
+        os.chmod(token_path, 0o600)        # the token authorizes state changes; only this user reads it
+    except OSError:
+        pass
     server.bridge_token = token_path.read_text(encoding='utf-8').strip()
     server.bridge = SolomonBridge(d, config.get('allowed_projects', []))
+    try:                                   # runs a quit app left open: close them before anything resumes
+        from core.mission import finalize_orphaned_runs
+        closed = finalize_orphaned_runs()
+        if closed:
+            print('closed orphaned runs: ' + ', '.join(closed), flush=True)
+    except Exception as exc:
+        print(f'orphaned run cleanup skipped: {exc}', flush=True)
     if (d.load_config().get('autonomy') or {}).get('resume_on_start'):
         import threading
         threading.Thread(target=d.resume_interrupted_missions, name='director-mission-resume', daemon=True).start()
