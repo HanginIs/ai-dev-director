@@ -201,7 +201,7 @@ docs/                  설계 기록
 
 ## 크레딧과 라이선스
 
-원본은 DAVZD의 [ai-dev-director](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8입니다. 이 포크의 수정은 HanginIs가 Claude(Anthropic)의 도움을 받아 했습니다. 앱 아이콘은 이 포크를 위해 AI의 도움으로 만든 그림입니다(`macos/Assets/AppIcon.png`).
+원본은 DAVZD의 [ai-dev-director](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8입니다. 이 포크의 수정은 HanginIs가 했습니다. 고칠 항목은 Codex(OpenAI), Antigravity(Google), Claude(Anthropic) 세 AI가 각각 내놓은 코드 분석 결과를 종합해 정했고, 코드 수정과 테스트는 Claude와 함께 했습니다. 앱 아이콘은 이 포크를 위해 AI의 도움으로 만든 그림입니다(`macos/Assets/AppIcon.png`).
 
 MIT License. `LICENSE` 파일을 보세요. 원본의 저작권 표시와 라이선스 문구를 그대로 유지합니다.
 

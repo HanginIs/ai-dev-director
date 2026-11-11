@@ -203,7 +203,7 @@ Unit tests do not run the real CLIs and do not touch the working database. Integ
 
 ## Credits and license
 
-The original is [ai-dev-director](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8 by DAVZD. The changes in this fork were made by HanginIs with help from Claude (Anthropic). The app icon is AI-assisted artwork made for this fork (`macos/Assets/AppIcon.png`).
+The original is [ai-dev-director](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8 by DAVZD. The changes in this fork were made by HanginIs. What to fix was decided by combining separate code reviews from three AIs: Codex (OpenAI), Antigravity (Google) and Claude (Anthropic). The code changes and tests were done with Claude. The app icon is AI-assisted artwork made for this fork (`macos/Assets/AppIcon.png`).
 
 MIT License. See the `LICENSE` file. The original copyright notice and license text are kept as they are.
 
