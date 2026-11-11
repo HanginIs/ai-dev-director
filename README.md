@@ -1,173 +1,210 @@
-# AI DEV DIRECTOR
+# AI Dev Director · HanginIs 수정판
 
-**세 개의 AI 코딩 CLI를 한 회사처럼 돌려, 목표 한 줄을 검증된 코드로 바꾸는 로컬 개발 감독관.**
-A local orchestrator that runs three subscription AI CLIs (Claude Code, OpenAI Codex, Google Antigravity) as
-HEAD / BUILDER / REVIEWER, and turns a one-line goal into tested, independently reviewed code — without a single
-pay-per-use API call.
+[한국어](README.md) · [English](README.en.md)
 
-> 상태: 개인 운영 환경에서 매일 쓰고 있는 코드를 그대로 공개한 것입니다. 윈도우 우선, 한국어 UI.
-> **macOS / Linux: 코드는 준비돼 있지만 미검증입니다** (v3.1.8, 아래 참고). 맥에서 돌려 보신 분은 이슈로 알려 주시면 고맙겠습니다.
-> Status: the code we run daily, published as-is. Windows-first, Korean UI, English comments.
-> **macOS / Linux: supported in code since v3.1.8 but not yet verified on a real Mac** — reports welcome.
+로그인해 둔 AI 코딩 CLI 세 개(Claude Code, OpenAI Codex, Google Antigravity)를 HEAD·BUILDER·REVIEWER로 나눠 돌려, 목표 한 줄을 테스트와 독립 리뷰를 거친 코드로 바꾸는 로컬 개발 감독 도구입니다. 종량제 API는 쓰지 않습니다.
 
----
+이 저장소는 [DAVZD의 ai-dev-director](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8을 macOS에서 쓰도록 고친 포크입니다. 원본은 Windows 우선이고, 이 포크는 macOS 전용 앱을 더하고 결과 반영·미션 판정·저장소 처리를 보강했습니다.
 
-## macOS 전용 앱 (HanginIs fork)
+- **상태:** macOS에서 매일 사용합니다. 전체 테스트 649개가 macOS에서 통과합니다(2026-11-11, Windows인 척하는 테스트 1개는 건너뜀).
+- **미검증:** 이 포크의 변경분은 Windows와 Linux에서 실행해 보지 않았습니다. TRIAD 연구 모드는 원본 기능 그대로이며, 단위 테스트 통과 외에 이 포크에서 따로 검증하지 않았습니다.
 
-이 포크에는 Swift/AppKit + WKWebView 전용 앱과 macOS 실행 관련 수정이 포함됩니다.
-기존 CLI 로그인과 프로젝트 설정을 사용하며, 서버를 자동 실행하고 콘솔을 앱 창에 표시합니다.
+## 하는 일
+
+```
+목표 ─▶ HEAD (작업 명세 ORDER 작성) ─▶ BUILDER (파일 변경안을 JSON으로 제출)
+              ▲                                   │
+              │                                   ▼
+        HEAD 판정 ◀── REVIEWER ◀── 검증 (격리 작업본에서 빌드·테스트)
+```
+
+- **역할:** 기본값은 HEAD가 Claude Code, BUILDER가 Antigravity, REVIEWER가 Codex입니다. 한 CLI가 한도에 걸리거나 실패하면 다른 CLI로 넘어갑니다. CLI 두 개로도 동작합니다.
+- **미션:** 채팅 한 줄이 미션이 됩니다. HEAD가 단계(마일스톤)를 하나씩 계획하고, 각 단계의 테스트·리뷰 결과를 보고 다음 단계를 다시 계획합니다.
+- **격리:** 모든 변경은 프로젝트 안 `.director_worktrees/`의 git 작업본에서만 이뤄집니다. 프로젝트 원본은 미션이 끝난 뒤 반영 단계에서만 바뀝니다.
+- **반영:** 통과한 결과물은 설정에 따라 프로젝트에 자동 반영됩니다. 반영 뒤 프로젝트에서 테스트를 다시 돌리고, 실패하면 되돌립니다. 커밋은 하지 않습니다.
+
+## 요구 사항
+
+- macOS 13 이상
+- Python 3.9 이상, Git
+- 앱을 빌드하려면 Xcode(Swift 5.9 이상)
+- 로그인된 CLI 두 개 이상: `claude`, `codex`, `agy`. 구독 로그인 세션을 그대로 씁니다. API 키는 필요 없고, 환경 변수에 있어도 CLI를 부르기 전에 지웁니다.
+
+## 설치와 실행
 
 ```bash
 python3 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt
-./script/build_and_run.sh
+./script/build_and_run.sh              # dist/AI-Dev-Director.app을 만들고 실행
+./script/build_and_run.sh --build-only # 빌드만
 ```
 
-Xcode/Swift 5.9 이상, macOS 13 이상이 필요합니다. 결과는 `dist/AI-Dev-Director.app`입니다.
-앱은 빌드 시 저장소의 절대 경로를 기억하므로 저장소를 이동했다면 다시 빌드하세요.
-앱 자체는 응용 프로그램 폴더로 복사할 수 있습니다.
-`--build-only` 옵션은 앱을 실행하지 않고 빌드만 합니다.
+앱은 서버를 자동으로 띄우고 콘솔을 창에 보여 줍니다. 빌드할 때 저장소의 절대 경로를 기억하므로, 저장소를 옮겼다면 다시 빌드하세요. 앱 자체는 응용 프로그램 폴더로 복사해도 됩니다.
 
-- 앱 안의 프로젝트 선택 버튼은 macOS 기본 폴더 선택 창을 엽니다.
-- 종료 시 서버를 백그라운드로 유지하거나 작업과 서버를 중지할 수 있습니다. 콘솔의 **시스템 중지**로 서버가 이미 꺼졌다면 **작업 중지 후 종료**는 바로 앱을 닫습니다.
-- 실행 오류는 `data/desktop-server.log`에 기록됩니다.
-- 아이콘: AI-assisted artwork, 이 포크를 위해 생성. 원본은 `macos/Assets/AppIcon.png`.
-- 이 포크는 macOS에서 매일 사용합니다. 전체 테스트가 macOS에서 통과합니다(2026-11-11, Windows인 척하는 테스트 1개는 건너뜀).
-  아래 본문의 "macOS 미검증"과 테스트 통과 수는 원본 저장소 기준 설명입니다.
-- 결과 반영: 검수를 통과한 시점의 파일만 반영합니다. 검수 뒤 작업본이 바뀌었거나, 빌드·테스트가 하나도 실행되지 않은
-  결과는 자동 반영하지 않습니다. 사용자가 지운 파일은 충돌로 처리합니다.
-- 검증 명령을 찾지 못하면 아무것도 실행하지 않고 "검증 안 함"으로 표시합니다. `Tests/run.sh`와 Makefile의 `test`를 인식합니다.
-  그 밖의 프로젝트는 `config.local.yaml`의 `projects`에 테스트 명령을 등록하세요.
-- 다른 저장소 안에 있는 폴더를 프로젝트로 지정하면 새 저장소를 만들지 않고 저장소 루트를 지정하라고 안내합니다.
-- 서버 로그(`data/desktop-server.log`)는 5MB를 넘으면 앱을 켤 때 `.1`로 넘기고 새로 씁니다. 성공한 조회 요청은 기록하지 않습니다.
-- 맥에서 앱 실행·콘솔 표시·폴더 선택 및 취소·서버 자동 시작을 수동 확인했습니다.
-  AI 개발 미션 전체의 성공을 보증하는 검증은 아니며, 공급자 오류는 별도로 확인해야 합니다.
+- **프로젝트 선택:** 보기 → 프로젝트 폴더 선택(⌘O). macOS 기본 폴더 선택 창이 열립니다.
+- **종료:** 종료할 때 "백그라운드 계속 실행"(창만 닫고 서버와 작업 유지)과 "작업 중지 후 종료" 중에서 고릅니다.
+- **연결이 끊겼을 때:** 보기 → 콘솔 다시 연결(⌘R).
 
-## 무엇을 하나 (What it does)
-
-```
-   goal ──▶ HEAD (plans an ORDER) ──▶ BUILDER (proposes whole files as JSON)
-                 ▲                              │
-                 │                              ▼
-          HEAD decision ◀── REVIEWER ◀── Verifier (build / tests in an isolated worktree)
-```
-
-- **NORMAL 파이프라인** — HEAD가 목표를 ORDER(허용 경로·파일 수·diff 상한이 명시된 작업 명세)로 만들고, BUILDER가
-  파일 전체를 JSON으로 제출하면 Director가 Scope Guard로 검사한 뒤 **격리 작업본(git worktree)** 에 반영하고 테스트를
-  돌립니다. REVIEWER가 독립 검토하고 HEAD가 PASS/FAIL/수정 지시를 내립니다. 원본 프로젝트는 절대 직접 수정되지 않습니다.
-- **미션(Mission)** — 채팅 한 줄이 미션이 됩니다. HEAD가 마일스톤 ORDER를 하나씩 계획하고, 각 단계는 직전 PASS 작업본의
-  스냅샷에서 시작하며, 실제 증거(테스트·리뷰)를 보고 다시 계획합니다. 완료된 산출물은 설정에 따라 자동 반영되되
-  사람이 그 사이 고친 파일은 덮어쓰지 않습니다.
-- **HEAD 프록시 자율 모드** — 결제·실계좌 주문·실제 자격증명·되돌릴 수 없는 외부 행동만 사람에게 묻고, 나머지
-  마찰(빌더 JSON 깨짐, 토큰 한도, 경로 범위, 리뷰 지적, 한도 초과)은 재시도·공급자 교체·재계획으로 스스로 풉니다.
-- **TRIAD 연구 모드** — 세 AI가 독립 연구 → 상호 비판 → 종합 가설 → NORMAL 파이프라인으로 실험 구현 → 세 갈래
-  해석 → 연구 메모리. 설계와 구현은 `docs/V3_TRIAD_RESEARCH_PLAN.md`.
-- **TRINITY 콘솔(8081)** — 세 AI의 역할·호출·토큰·현재 단계를 보여주는 무대형 대시보드, 채팅, 미션 다시보기,
-  역할 교환, **작업 정지 / 시스템 중지** 버튼. `/classic`은 표 중심의 작업실 화면입니다.
-
-## 지키는 것 (Hard rules, enforced in code)
-
-| 규칙 | 구현 |
-|---|---|
-| 종량제 API 금지 — 로그인된 구독 CLI만 사용 | `core/env_utils.py` 가 모든 `*_API_KEY` 를 환경에서 제거하고 CLI를 호출 |
-| 원본 프로젝트 무수정 | 모든 빌드는 `.director_worktrees/` 안의 git worktree에서만 |
-| Scope Guard | ORDER의 허용 경로·보호 경로·파일 수·diff 상한을 Director가 검사, 빌더는 완화 불가 (`core/safety.py`) |
-| 리뷰어 fail-closed | 리뷰 응답이 없거나 깨지면 PASS가 아니라 FAIL |
-| 돈·자격증명은 사람이 | `core/autopilot.py` 의 정지 조건 — 결제, 실계좌 주문 코드(`OrderSend` 등), 계정 생성, 외부 비가역 행동 |
-| 프로세스 트리 타임아웃 | 멈춘 CLI는 자식까지 함께 종료 (`core/process_runner.py`) |
-| 정지는 정지 | 채팅의 "중단/멈춰/stop", 콘솔의 작업 정지 버튼 → 돌던 CLI 즉시 종료, 미션 STOPPED 고정, 재시작해도 재개 안 됨 |
-
-## 요구 사항 (Requirements)
-
-- Windows 10/11 (매일 쓰는 환경). **macOS / Linux는 미검증**: 프로세스 트리 종료(psutil), 작업본 폴더 열기(`open` / `xdg-open`),
-  CLI 탐색(`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`), 셸 런처(`start-companion.sh`)까지 코드는 갖춰져 있으나
-  실제 맥에서 돌려 보지 못했습니다. 폴더 선택 창은 tkinter라 Homebrew 파이썬은 `brew install python-tk`가 필요하고,
-  없으면 콘솔에 경로를 직접 입력하면 됩니다.
-- Python 3.9+ 와 `pip install -r requirements.txt`
-- Git
-- 로그인된 CLI 중 최소 두 개: **Claude Code**(`claude`), **OpenAI Codex**(`codex`), **Google Antigravity**(`agy`).
-  구독 로그인 세션을 그대로 씁니다. API 키는 필요 없고, 있어도 무시됩니다.
-
-## 빠른 시작 (Quick start)
+앱 없이 쓰려면 서버만 띄우고 브라우저로 엽니다.
 
 ```bash
-pip install -r requirements.txt
-python -m pytest -q            # 604개 테스트, CLI 없이 스텁으로 돕니다 (약 25분)
-```
-
-2026-11-04 기준 593/596 통과, 3개 실패 (v3.1.8에서 플랫폼 분기 테스트 8개 추가, 윈도우에서 통과). 실패 3개는 알려진 드리프트입니다: 두 개는 "저장소가 아닌 폴더는 거부"를
-기대하는 옛 UI 테스트인데 v3.0부터 빈 폴더도 자동 준비(greenfield)하도록 바뀌었고, 하나는 스냅샷 제외 목록 픽스처
-드리프트입니다. 안전 게이트·정책·미션 테스트는 모두 통과합니다.
-
-콘솔 켜기 (윈도우):
-
-```powershell
-.\start-companion.ps1          # http://127.0.0.1:8081  (TRINITY 무대)  ·  /classic (작업실)
-.\stop-companion.ps1
-```
-
-콘솔 켜기 (macOS / Linux, 미검증):
-
-```bash
-chmod +x start-companion.sh stop-companion.sh
-./start-companion.sh           # python3 companion_server.py 를 백그라운드로, PID는 data/companion.pid
+./start-companion.sh    # http://127.0.0.1:8081 (스테이지 화면), /classic (작업실 화면)
 ./stop-companion.sh
 ```
 
-Antigravity CLI(`agy`)가 그 플랫폼에 없으면 `config.yaml`에서 BUILDER를 `codex` 또는 `claude`로 바꾸면 됩니다. CLI 두 개로도 동작합니다.
-
-CLI로 바로 한 번 돌리기:
+터미널에서 바로 미션을 돌릴 수도 있습니다.
 
 ```bash
-python director.py run -p D:/work/my_project -g "src/calc.py에 add(a, b)를 만들고 테스트를 추가해"
-python director.py mission -p D:/work/my_project -g "회원가입 흐름을 끝까지 구현"
-python director.py do -g "로그인 버그 고쳐" --profile quick     # 미션 + 자동 반영을 한 번에
-python director.py status
-python director.py clean-worktrees -p D:/work/my_project --dry-run
+./.venv/bin/python director.py do "로그인 버그 고쳐" -p /path/to/project --profile quick
+./.venv/bin/python director.py status
+./.venv/bin/python director.py clean-worktrees -p /path/to/project --dry-run
 ```
 
-## 설정 (Configuration)
+`do`는 서버가 떠 있으면 서버를 통해 미션을 시작해 콘솔에 보이게 하고, 없으면 그 자리에서 실행합니다. `--no-apply`를 주면 결과를 작업본에만 두고 프로젝트에는 반영하지 않습니다.
 
-`config.yaml` 한 파일입니다. 역할별 공급자(`head/builder/reviewer`), 타임아웃, 안전 상한, 검증 명령,
-자율 모드(`autonomy`)와 프로필(`quick / standard / deep`), 프로젝트별 검증 명령(`projects`)을 둡니다.
-프로젝트별 검증 명령을 프로젝트 안이 아니라 여기에 두는 이유는 빌더가 그것을 약화시킬 수 없게 하기 위해서입니다.
+## 미션 결과 읽기
 
-프로젝트별 명령이 없으면 프로젝트가 실제로 지원하는 테스트를 고릅니다. 파이썬 `tests/`가 있으면 pytest(프로젝트에
-자체 pytest 설정이 없으면 상위 폴더의 `pytest.ini`를 쓰지 않도록 `-c /dev/null --rootdir .`), `Package.swift`에 테스트
-대상이 있으면 `swift test`, `package.json`에 test 스크립트가 있으면 `npm test`입니다. 기본값 `python -m pytest tests/`가
-Swift·JS 프로젝트를 종료 코드 4로 매번 실패시키던 문제를 막습니다. `swift test` 결과의 XCTest·Swift Testing 통과 수도
-집계해 회귀를 판단합니다. `verification.timeout`(기본 120초)은 검증 명령 하나에 주는 시간입니다.
+미션이 끝나면 메시지 하나에 결과와 반영 여부가 함께 나옵니다.
 
-절대 경로처럼 한 컴퓨터에만 맞는 설정은 깃에 올라가지 않는 `config.local.yaml`에 둡니다. `config.yaml`과 같은 구조이며
-그 위에 병합됩니다. 예: 테스트 대상이 없는 SwiftPM 앱의 점검 실행 파일, NumPy가 필요한 앱의 전용 가상환경 Python.
+| 상태 | 뜻 |
+| --- | --- |
+| 미션 완료 (DONE) | HEAD가 목표를 달성했다고 판정했고, 통과한 단계가 하나 이상 있습니다. |
+| 미션 중단 - 단계 예산 소진 또는 계획 불가 (INCOMPLETE) | 단계 예산을 다 썼거나, HEAD는 완료라고 했지만 통과한 단계가 없습니다. |
+| 미션 실패 (FAILED) | 연속 실패 한도에 걸렸거나, 검증 명령 자체가 같은 이유로 두 번 연속 실패했습니다. |
+| 미션 보류 - 사용자 결정 필요 (BLOCKED) | 결제·실계좌 주문·실제 자격증명·되돌릴 수 없는 외부 행동처럼 사람이 정해야 하는 일을 만났습니다. |
+| 정지 (STOPPED) | 사용자가 멈췄습니다. 다시 켜도 스스로 재개하지 않습니다. |
 
-`companion.json` 은 콘솔 포트와(선택) 허용 프로젝트 목록입니다. 콘솔은 항상 `127.0.0.1` 에만 바인딩되며,
-상태를 바꾸는 요청은 로컬 출처 검사와 브리지 토큰(`data/solomon-bridge.token`, 첫 실행 때 생성)을 요구합니다.
+반영 결과는 마지막 줄에 나옵니다.
 
-## 구조 (Layout)
+- **"결과물을 프로젝트에 적용했습니다":** 파일을 프로젝트에 썼고, 프로젝트에서 테스트를 다시 통과했습니다.
+- **"적용할 변경이 없습니다":** 확인만 하고 고칠 것이 없었거나, 프로젝트가 이미 같은 내용입니다. 오류가 아닙니다.
+- **"자동 적용하지 않았습니다 (이유)":** 충돌, 검증 안 함, 검수 뒤 작업본 변경 등으로 반영을 보류했습니다. 작업본은 남아 있고, 콘솔에서 직접 반영하거나 폐기할 수 있습니다.
+
+## 지키는 규칙
+
+| 규칙 | 동작 |
+| --- | --- |
+| 종량제 API 금지 | 모든 `*_API_KEY`를 환경에서 지운 뒤 CLI를 부릅니다. |
+| 원본 격리 | 빌드와 수정은 `.director_worktrees/`의 작업본에서만 합니다. |
+| 범위 제한 | ORDER에 적힌 허용 경로·보호 경로·파일 수·변경 줄 수를 Director가 검사합니다. BUILDER는 이를 완화할 수 없습니다. |
+| 리뷰 실패는 실패 | 리뷰 응답이 없거나 깨지면 통과가 아니라 실패로 처리합니다. |
+| 검수한 것만 반영 | 통과 시점의 파일 내용을 기록해 두고, 반영 직전에 작업본과 대조합니다. 검수 뒤에 바뀐 작업본은 반영하지 않습니다. |
+| 사용자 편집 우선 | AI와 사용자가 같은 파일을 고쳤으면 충돌로 막습니다. 사용자가 지운 파일을 되살리지 않고, 삭제는 반영하지 않습니다. |
+| 검증 안 한 결과는 사람이 | 빌드·테스트가 하나도 실행되지 않은 결과는 자동 반영하지 않습니다. 콘솔에서 사람이 직접 반영할 수 있습니다. |
+| 돈과 자격증명은 사람이 | 결제, 실계좌 주문 코드, 계정 생성, 되돌릴 수 없는 외부 행동에서 멈춥니다. |
+| 정지는 정지 | 채팅의 "중단"·"멈춰"·"stop"이나 콘솔의 작업 정지 버튼은 그 미션이 띄운 CLI를 바로 끝냅니다. 다른 미션은 계속 돕니다. |
+| 저장소 안에 저장소 금지 | 이미 다른 git 저장소 안에 있는 폴더를 프로젝트로 지정하면 새 저장소를 만들지 않고, 저장소 루트를 지정하라고 안내합니다. |
+
+## 검증 명령
+
+프로젝트마다 어떤 명령으로 검증할지는 다음 순서로 정합니다.
+
+1. `config.yaml` 또는 `config.local.yaml`의 `projects`에 등록한 명령
+2. `tests/` 폴더에 파이썬 테스트 파일이 있으면 pytest (프로젝트에 pytest 설정이 없으면 상위 폴더의 `pytest.ini`를 쓰지 않습니다)
+3. `Package.swift`에 테스트 대상이 있으면 `swift test`
+4. `package.json`에 test 스크립트가 있으면 `npm test`
+5. `Tests/run.sh`, `tests/run.sh`, `test/run.sh`가 있으면 그 스크립트
+6. `Makefile`에 `test` 대상이 있으면 `make test`
+
+폴더 이름은 대소문자를 정확히 구분합니다. macOS 기본 디스크는 대소문자를 구분하지 않지만, Swift의 `Tests/` 폴더를 파이썬 `tests/`로 보지 않습니다.
+
+아무것도 찾지 못하면 아무것도 실행하지 않고 **검증 안 함(NOT_RUN)**으로 기록합니다. 이 경우 결과는 자동 반영되지 않습니다. 검증 명령이 테스트 없음(종료 코드 4·5)이나 명령 없음(126·127)으로 두 단계 연속 실패하면, BUILDER가 고칠 수 없는 문제이므로 미션을 끝내고 명령을 등록하라고 안내합니다.
+
+검증 명령을 프로젝트 안이 아니라 Director 설정에 두는 이유는 BUILDER가 검증을 약하게 바꾸지 못하게 하기 위해서입니다.
+
+## 설정
+
+- **`config.yaml`:** 역할별 CLI, 타임아웃, 안전 상한(`max_files_changed`, `max_diff_lines`), 기본 검증 명령, 자율 모드와 프로필.
+- **`config.local.yaml`:** 한 컴퓨터에만 맞는 설정. git에 올라가지 않으며 `config.yaml` 위에 병합됩니다.
+- **`companion.json`:** 콘솔 포트(기본 8081)와 허용 프로젝트 목록.
+
+```yaml
+# config.local.yaml 예시
+verification:
+  timeout: 300        # 검증 명령 하나에 주는 시간(초). 처음 도는 swift test는 컴파일부터 합니다.
+projects:
+  "/path/to/my-app":
+    verification:
+      test_command: ["sh", "-c", "swift run MyAppChecks"]
+```
+
+| 프로필 | 단계 수 | 자동 수정 | 빌더 시도 |
+| --- | --- | --- | --- |
+| `quick` | 2 | 1 | 2 |
+| `standard` (기본) | 6 | 3 | 3 |
+| `deep` | 12 | 3 | 3 |
+
+`autonomy.auto_apply`는 `off`, `on_done`(목표 달성 판정 때만), `on_pass`(통과한 결과물이 있으면, 기본값) 중 하나입니다.
+
+콘솔은 항상 `127.0.0.1`에만 열립니다. 상태를 바꾸는 요청은 로컬 출처 검사와 토큰(`data/solomon-bridge.token`, 본인만 읽을 수 있음)을 요구합니다.
+
+## 후속 미션의 출발점
+
+새 미션은 기본적으로 프로젝트의 현재 상태에서 시작합니다. 이전 미션의 작업본에서 이어 가는 것은 세 조건을 모두 만족할 때뿐입니다. 그 작업본이 검수를 통과했고, 아직 프로젝트에 반영되지 않았고, 그 미션이 시작된 뒤 프로젝트에 새 커밋이 없어야 합니다. 프로젝트가 그 사이 바뀌었다면 옛 작업본 위에서 작업해 새 변경을 되돌리는 일이 없도록 프로젝트에서 다시 시작합니다.
+
+## 데이터와 로그
+
+| 위치 | 내용 |
+| --- | --- |
+| `data/director.db` | 실행·상태·사용량 기록(SQLite, WAL 모드) |
+| `data/missions/` | 미션별 계획과 단계 결과 |
+| `runs/<실행 ID>/` | 단계별 ORDER, 검증 결과, 리뷰, 판정, 검수 기록, 반영 백업 |
+| `<프로젝트>/.director_worktrees/` | 단계별 작업본. `director.py clean-worktrees`로 정리합니다. |
+| `data/desktop-server.log` | 앱이 띄운 서버의 로그. 5MB를 넘으면 앱을 켤 때 `.1`로 넘기고 새로 씁니다. 성공한 조회 요청은 기록하지 않습니다. |
+
+콘솔 창이 숨겨지거나 최소화되면 상태 조회를 멈추고, 다시 보이면 바로 따라잡습니다. 앱이나 서버를 끄는 바람에 진행 중으로 남은 실행은 다음에 서버를 켤 때 정리합니다.
+
+## 구조
 
 ```
 director.py            CLI 진입점 (run / mission / do / status / resume / clean-worktrees)
-companion_server.py    8081 콘솔 서버 (정적 파일 허용 목록 + /ops/* API)
-dashboard_server.py    작업실(/classic)·채팅·미션 정지·상태 요약
-agents/                HEAD / BUILDER / REVIEWER 어댑터 (claude, codex, antigravity, google 역할, mock)
-core/                  orchestrator, mission, autopilot(정책), safety(Scope Guard), verifier, git_manager,
-                       process_runner, provider_manager(장애 조치), research_*(TRIAD), usage(토큰 집계)
-schemas/               ORDER / BuilderResult / ReviewResult / Decision / Provenance (pydantic)
-console/               TRINITY 무대와 작업실 프런트엔드 (의존성 없는 정적 파일)
-scripts/               폴더 선택 도우미, CLI 진단, 실패 run 재시도, 역할 smoke
-tests/                 604 tests (스텁 CLI로 격리, 로컬 설정 파일에 의존하지 않음; 실제 CLI 통합은 -m integration_cli 로 opt-in)
-docs/                  설계·마일스톤 기록
+companion_server.py    콘솔 서버 (8081)
+dashboard_server.py    작업실 화면, 채팅, 미션 정지, 상태 요약
+agents/                HEAD / BUILDER / REVIEWER 어댑터
+core/                  미션, 검증, 결과 반영, 범위 검사, 프로세스 관리, 공급자 전환, TRIAD 연구
+schemas/               ORDER, 빌더 결과, 리뷰, 판정 형식
+console/               스테이지와 작업실 화면 (정적 파일)
+macos/                 macOS 앱 소스 (Swift 패키지)
+script/                앱 빌드 스크립트
+tests/                 테스트
+docs/                  설계 기록
 ```
 
-## 알려진 한계 (Known limits)
+## 테스트
 
-- 큰 변경도 "파일 전체 JSON 제안" 방식이라 CLI 출력 한도에 걸릴 수 있습니다. 한 번은 압축 재시도, 그 다음은 공급자 교체.
-- 각 CLI의 구독 한도(쿼터)에 그대로 종속됩니다. 한도가 끝나면 장애 조치 순서대로 다른 CLI로 넘어갑니다.
-- 리뷰어와 HEAD가 같은 공급자로 몰리면 `REDUCED_INDEPENDENCE` 표시와 함께 통과시킵니다(숨기지 않음).
-- 테스트는 로컬 스텁 CLI로 돕니다. 실제 세 CLI를 끝까지 태우는 E2E는 opt-in 마커로만 돌아갑니다.
-- macOS / Linux는 미검증입니다. 일부 테스트는 윈도우 드라이브 문자 경로(`C:/...`)를 전제로 해서 그 플랫폼에서는 실패할 수 있으며, 제품 동작과는 무관합니다.
+```bash
+./.venv/bin/python -m pytest -q     # 약 5분, 실제 CLI 없이 스텁으로 돕니다
+```
 
-## 라이선스 (License)
+단위 테스트는 실제 CLI를 실행하지 않고 운영 DB를 건드리지 않습니다. 실제 CLI를 태우는 통합 테스트는 `-m integration_cli`로만 돕니다.
 
-MIT License — `LICENSE` 파일을 보세요. 자유롭게 쓰고, 고치고, 재배포할 수 있습니다. 저작권 표시와 라이선스 문구만 남겨 주세요.
+## 원본과 달라진 점
+
+- **macOS 앱:** Swift·AppKit·WKWebView 전용 앱, 기본 폴더 선택 창, 종료 처리, 앱 아이콘.
+- **검증 명령 감지:** 프로젝트가 실제로 지원하는 테스트를 골라 실행합니다. 원본은 모든 프로젝트에 `python -m pytest tests/`를 돌려 Swift·JS 프로젝트가 매 단계 실패했습니다.
+- **검증 안 함 구분:** 통과·실패·실행 안 함을 구분하고, 실행 안 한 결과는 자동 반영하지 않습니다.
+- **반영 보호:** 검수한 파일만 반영, 사용자 삭제는 충돌 처리, 이미 반영된 결과의 상태를 덮어쓰지 않음.
+- **미션 판정:** 통과 단계가 없으면 완료로 표시하지 않음, 고칠 수 없는 검증 실패의 반복 중단, "변경할 것 없음" 답 허용, 후속 미션은 프로젝트 최신 상태 우선.
+- **정지와 복구:** 지정한 미션의 프로세스만 종료, 서버 시작 시 남은 실행 정리.
+- **저장소와 DB:** 저장소 안에 저장소를 만들지 않음, SQLite WAL 모드와 대기 시간.
+- **macOS 경로 처리:** 실행 파일 이름과 문서 경로를 macOS 형식으로도 올바로 읽습니다.
+- **콘솔:** 솔로몬 연동 링크와 방송 모드를 걷어 냈고, 작업실 화면에서 스테이지 화면으로 돌아가는 링크를 넣었습니다.
+
+## 알려진 한계
+
+- 큰 변경도 BUILDER가 파일 내용을 JSON으로 제출하는 방식이라 CLI 출력 한도에 걸릴 수 있습니다.
+- 각 CLI의 구독 한도에 그대로 묶입니다. 한도가 끝나면 다른 CLI로 넘어갑니다.
+- 리뷰어와 HEAD가 같은 CLI로 몰리면 `REDUCED_INDEPENDENCE` 표시와 함께 진행합니다.
+- 변경 줄 수 상한은 단계별로만 적용됩니다. 여러 단계에 걸친 미션 전체의 변경량에는 상한이 없습니다.
+- HEAD와 리뷰어는 프로젝트의 과거 결정(변경 이력)을 자동으로 읽지 않습니다. 기존 안전 규칙을 뒤집는 계획이 통과할 수 있으니, 결과를 반영하기 전에 변경 내용을 직접 확인하세요.
+- 이 변경 이전에 끝난 실행은 검수 기록이 없어 반영이 거부됩니다. 다시 검수해야 합니다.
+
+## 크레딧과 라이선스
+
+원본은 DAVZD의 [ai-dev-director](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8입니다. 이 포크의 수정은 HanginIs가 Claude(Anthropic)의 도움을 받아 했습니다. 앱 아이콘은 이 포크를 위해 AI의 도움으로 만든 그림입니다(`macos/Assets/AppIcon.png`).
+
+MIT License. `LICENSE` 파일을 보세요. 원본의 저작권 표시와 라이선스 문구를 그대로 유지합니다.
+
+## 이전 문서
+
+[이번 개정 전의 README](REFERENCE.md)를 그대로 보존했습니다. Windows 실행 방법과 원본 기준 설명이 들어 있습니다. 내용이 다르면 이 README를 우선합니다. 설계 기록은 `docs/`에 있습니다.
