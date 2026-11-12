@@ -87,6 +87,8 @@ autonomy:
 
 # Optional external commissioner (a separate "CEO" service that posts goal-level missions to /ops/solomon).
 # Only git projects under allowed_roots may be targeted; the Director's own folder is never a target.
+# `director.py do` starts its mission through the same endpoint, so it needs this list as well: put the parent
+# folder of your projects in config.local.yaml (the value below is the original's Windows default).
 solomon:
   allowed_roots:
     - "D:/work"

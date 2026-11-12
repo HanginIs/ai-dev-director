@@ -845,6 +845,8 @@ def start_goal_mission(project_path: str, goal: str, profile: Optional[str] = No
         project_context = orch._read_project_context(previous or project_path)
         if previous:
             project_context["note"] = "Continuing from the latest mission deliverable (isolated worktree) of this project; the listed files already exist there."
+        from core import project_history
+        project_history.attach(project_context, project_path, orch.config)
         from core import usage
         usage.set_context(stage="CHAT", run_id=None, mission_id=None)
         resp = orch.head.chat(goal, project_context, [])
@@ -1061,6 +1063,8 @@ def handle_chat_message(msg: str):
             if previous:
                 project_context["note"] = ("Continuing from the latest mission deliverable (isolated worktree) of this "
                                            "project; the listed files already exist there.")
+            from core import project_history
+            project_history.attach(project_context, project_path, orch.config)
         else:
             project_context = {"project_path": None, "existing_files": [], "note": "NO PROJECT SELECTED"}
         from core import usage

@@ -266,7 +266,8 @@ class CompanionHandler(d.DashboardHandler):
                     goal = str(payload.get('goal', '')).strip()
                     if not 5 <= len(goal) <= 6000:
                         raise ValueError('작업 목표는 5~6000자여야 합니다')
-                    result = d.start_goal_mission(target, goal, profile=payload.get('profile'), source='solomon', request_id=ident,
+                    source = 'cli' if payload.get('source') == 'cli' else 'solomon'
+                    result = d.start_goal_mission(target, goal, profile=payload.get('profile'), source=source, request_id=ident,
                                                   create_project=bool(payload.get('create_project')), auto_apply=payload.get('auto_apply'))
                     code = {'started': 202, 'busy': 409, 'question': 200, 'escalated': 200}.get(result.get('status'), 400)
                     return self._send_json(result, code)

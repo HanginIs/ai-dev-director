@@ -135,6 +135,15 @@ def latest_deliverable(project_path: str, store: Optional["MissionStore"] = None
 UNFIXABLE_VERIFY_EXITS = {4, 5, 126, 127}
 
 
+NO_VERIFICATION_HINT = ("검증 안 함: 이 프로젝트에는 Director가 실행할 검증 명령이 없어 테스트가 실행되지 않았습니다. "
+                        "테스트 증거가 필요한 작업이면 config.local.yaml의 projects에 이 프로젝트의 test_command를 "
+                        "등록한 뒤 다시 실행하세요.")
+
+
+def _not_verified(result: Optional[Dict[str, Any]]) -> bool:
+    return (result or {}).get("verification_status") == "NOT_RUN"
+
+
 def _unfixable_verification(result: Dict[str, Any]) -> Optional[str]:
     if not result or result.get("final_state") == State.PASS:
         return None
@@ -260,6 +269,12 @@ class MissionRunner:
             r = step["result"]
             self.notify(f"[미션 {step['index']}/{total}] 결과 {r['final_state']} - "
                         f"{self._one_line(r)}", run_id=step["run_id"])
+            if _not_verified(r) and r["final_state"] != State.PASS and not mission.get("no_verification_notified"):
+                # Said once, as soon as it is known: no ORDER can produce test evidence the Director never runs, so
+                # the operator may want to stop here and register a command instead of spending the other steps.
+                mission["no_verification_notified"] = True
+                self.store.save(mission)
+                self.notify(f"[미션 {step['index']}/{total}] {NO_VERIFICATION_HINT}", run_id=step["run_id"])
         result = step["result"]
         if result["final_state"] == State.PASS:
             mission["base_worktree"] = result.get("worktree_path") or mission.get("base_worktree")
@@ -400,13 +415,8 @@ class MissionRunner:
             context = orch._read_project_context(where)
         except Exception:
             context = {"project_path": where}
-        try:
-            from core import project_history
-            decisions = project_history.read(mission["project_path"], getattr(orch, "config", None))
-        except Exception:
-            decisions = None
-        if decisions:
-            context["decision_history"] = decisions
+        from core import project_history
+        project_history.attach(context, mission["project_path"], getattr(orch, "config", None))
         last_run = mission["steps"][-1].get("run_id") or mission["mission_id"]
         from core import usage
         usage.set_context(stage="MISSION_PLANNING", run_id=None)
@@ -453,6 +463,7 @@ class MissionRunner:
             "stop_detail": ((trans[-1].get("details") if trans else "") or "")[:1500],
             "tests": ver.get("test_counts"), "verification": (ver.get("summary") or "")[:600],
             "verify_command": (ver.get("test") or {}).get("command"), "verify_exit": (ver.get("test") or {}).get("exit_code"),
+            "verification_status": ver.get("status"),
             "review_verdict": rev.get("verdict"),
             "review_findings": (list(rev.get("p0") or []) + list(rev.get("p1") or []) + list(rev.get("p2") or []))[:10],
             "head_rationale": (dec.get("rationale") or "")[:1200],
@@ -491,6 +502,8 @@ class MissionRunner:
                 f"목표: {mission['goal'][:300]}\n{mission['summary'][:1500]}\n결과물 위치(작업본): {where}")
         if blocked:
             text += f"\n사유: {blocked[:600]}"
+        if status != "DONE" and any(_not_verified(s.get("result")) for s in mission["steps"]):
+            text += "\n" + NO_VERIFICATION_HINT
         # Measured before applying: afterwards the project and the result are the same and nothing differs.
         size_line = self._change_size_line(mission)
         # Apply first, so the one final message says whether the project now holds the result.

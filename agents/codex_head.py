@@ -248,6 +248,9 @@ class CodexHead(BaseHead):
         return DecisionSchema.model_validate(data)
 
     def chat(self, message: str, project_context: Dict[str, Any], history: list) -> Dict[str, Any]:
+        from core import project_history
+        project_context = dict(project_context or {})
+        decisions = project_history.planning_block(project_context.pop("decision_history", None))
         prompt = (
             "You are the HEAD architect of an autonomous software engineering system.\n"
             "The user is talking to you directly. You must determine if their message is a simple QUESTION or a DEV_TASK.\n\n"
@@ -286,6 +289,7 @@ class CodexHead(BaseHead):
             "- 'LOW': a small, narrowly-scoped change.\n"
             "A DEV_TASK runs as a multi-step MISSION: make this ORDER the first focused, testable milestone "
             "(core behavior + tests). You will plan the following milestones yourself from real results.\n\n"
+            f"{decisions}"
             f"PROJECT CONTEXT:\n{json.dumps(project_context, indent=2)}\n\n"
             "CHAT HISTORY:\n"
             f"{json.dumps(history[-5:], indent=2)}\n\n"

@@ -129,20 +129,44 @@ def do(goal: str, project: Optional[str], profile: Optional[str], no_apply: bool
     profile = profile or tag or "standard"
     payload = {"request_id": "cli-" + uuid.uuid4().hex[:16], "project_path": str(Path(target).resolve()), "goal": goal,
                "profile": profile, "auto_apply": "off" if no_apply else None}
-    token_path = Path(__file__).resolve().parent / "data" / "solomon-bridge.token"
+    payload["source"] = "cli"
+    import urllib.error
     try:
         req = urllib.request.Request("http://127.0.0.1:8081/bridge/missions", data=json.dumps(payload).encode("utf-8"),
-                                     headers={"Content-Type": "application/json", "X-Solomon-Bridge": token_path.read_text(encoding="utf-8").strip()})
+                                     headers={"Content-Type": "application/json", "X-Solomon-Bridge": _bridge_token()})
         with urllib.request.urlopen(req, timeout=600) as r:
             res = json.loads(r.read().decode("utf-8"))
         click.echo(f"[{res.get('status')}] " + (res.get("mission_id") or res.get("message") or res.get("error") or ""))
         if res.get("mission_id"):
             click.echo("진행 상황: http://127.0.0.1:8081/  (스테이지에서 실시간으로 보입니다)")
         return
+    except urllib.error.HTTPError as exc:
+        # The server is running and refused. Running the mission here instead would go around that answer: a busy
+        # project would get a second mission on top of the first, a folder the server does not allow would be
+        # worked on anyway. Say why and stop.
+        try:
+            detail = json.loads(exc.read().decode("utf-8"))
+            reason = str(detail.get("error") or detail.get("message") or "")
+        except Exception:
+            reason = ""
+        click.echo(f"콘솔 서버가 요청을 받지 않았습니다 (HTTP {exc.code}): {reason or exc.reason}")
+        if "허용된 폴더" in reason:
+            click.echo("config.local.yaml의 solomon.allowed_roots에 이 프로젝트의 상위 폴더를 추가하세요. "
+                       "서버를 다시 켤 필요는 없습니다.")
+        sys.exit(1)
     except Exception as exc:
-        click.echo(f"8081 companion unavailable ({str(exc)[:120]}); running the mission in this process instead.")
+        click.echo(f"콘솔 서버(8081)에 연결할 수 없어 이 터미널에서 직접 실행합니다 ({str(exc)[:120]}).")
     ctx = click.get_current_context()
-    ctx.invoke(mission, project=str(Path(target).resolve()), goal=goal, mission_id=None, max_steps=None, replan=None, profile=profile)
+    ctx.invoke(mission, project=str(Path(target).resolve()), goal=goal, mission_id=None, max_steps=None, replan=None,
+               profile=profile, no_apply=no_apply)
+
+
+def _bridge_token() -> str:
+    """The local token the console server asks for ('' when the server has never run here)."""
+    try:
+        return (Path(__file__).resolve().parent / "data" / "solomon-bridge.token").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 @cli.command()
@@ -152,8 +176,9 @@ def do(goal: str, project: Optional[str], profile: Optional[str], no_apply: bool
 @click.option("--max-steps", type=int, help="Milestone budget for a new mission (default: autonomy.max_steps)")
 @click.option("--replan", help="With --mission-id: send the blocked step back to HEAD planning, with this reason")
 @click.option("--profile", type=click.Choice(["quick", "standard", "deep"]), default=None, help="Budget profile for a new mission")
+@click.option("--no-apply", is_flag=True, help="For a new mission: keep the result in the worktree instead of applying it to the project")
 def mission(project: str, goal: str, mission_id: Optional[str], max_steps: Optional[int], replan: Optional[str] = None,
-            profile: Optional[str] = None):
+            profile: Optional[str] = None, no_apply: bool = False):
     """Run a goal-driven mission: HEAD plans milestones and decides on your behalf until the goal is done."""
     from core import autopilot
     from core.chat_manager import ChatManager
@@ -186,6 +211,8 @@ def mission(project: str, goal: str, mission_id: Optional[str], max_steps: Optio
         if previous:
             notify(f"이전 미션 결과물에서 이어서 진행: {previous}")
             context["note"] = "Continuing from the latest mission deliverable; the listed files already exist there."
+        from core import project_history
+        project_history.attach(context, project, config)
         from core import usage
         usage.set_context(stage="CHAT", run_id=None, mission_id=None)   # the ledger shows what this first HEAD call is
         resp = orch.head.chat(goal, context, [])
@@ -199,7 +226,8 @@ def mission(project: str, goal: str, mission_id: Optional[str], max_steps: Optio
         if gate["escalate"]:
             notify(f"사용자 결정 필요: {gate['escalate']}")
             return
-        mission_id = runner.create(project, goal, gate["order"], config=config, notes=gate["notes"], profile=profile, source="cli")["mission_id"]
+        mission_id = runner.create(project, goal, gate["order"], config=config, notes=gate["notes"], profile=profile,
+                                   source="cli", auto_apply="off" if no_apply else None)["mission_id"]
         notify(f"미션 시작 {mission_id}")
     else:
         if max_steps:

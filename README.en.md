@@ -6,7 +6,7 @@ A local development director that runs three logged-in AI coding CLIs (Claude Co
 
 This repository is a fork of [ai-dev-director by DAVZD](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8, changed to work on macOS. The original is Windows-first. This fork adds a native macOS app and hardens how results are applied, how missions are judged and how repositories are handled.
 
-- **Status:** used daily on macOS. All 675 tests pass on macOS (2026-11-11; one test that pretends to be Windows is skipped).
+- **Status:** used daily on macOS. All 691 tests pass on macOS (2026-11-12; one test that pretends to be Windows is skipped).
 - **Not verified:** the changes in this fork have not been run on Windows or Linux. TRIAD research mode is the original feature unchanged; beyond passing unit tests it has not been verified in this fork.
 
 The console and all mission messages are in Korean.
@@ -62,7 +62,9 @@ A mission can also be run from the terminal.
 ./.venv/bin/python director.py clean-worktrees -p /path/to/project --dry-run
 ```
 
-`do` starts the mission through the server when one is running, so it shows in the console, and otherwise runs it in the terminal. With `--no-apply` the result stays in the worktree and is not applied to the project.
+`do` starts the mission through the server when one is running, so it shows in the console, and runs it in the terminal only when no server can be reached. With `--no-apply` the result stays in the worktree and is not applied to the project, either way.
+
+The server accepts only projects under the folders listed in `solomon.allowed_roots`. The default in `config.yaml` is the original's Windows path, so list the parent folder of your projects in `config.local.yaml` (see the configuration example below). When the server refuses a request (outside the allowed folders, another mission in progress, and so on), `do` prints the reason and stops; it does not run the mission in the terminal instead.
 
 ## Reading a mission result
 
@@ -114,6 +116,8 @@ Folder names are matched with exact case. The default macOS disk ignores case, b
 
 When nothing is found, nothing is run and the result is recorded as **not run (NOT_RUN)**. Such a result is not applied automatically. If the verification command fails on two milestones in a row with "no tests" (exit code 4 or 5) or "command not found" (126 or 127), the BUILDER cannot fix it, so the mission ends and asks you to register a command.
 
+When a milestone that was not verified fails, you are told once, right then ("검증 안 함: …", asking you to register a `test_command` and run again), and the same note is added to the final message when the mission does not complete. A project whose tests live only in sub-folders (no `tests/` in the root) is not detected, so its command has to be registered.
+
 Verification commands live in the Director's settings and not inside the project, so that the BUILDER cannot weaken them.
 
 ## Configuration
@@ -130,6 +134,9 @@ projects:
   "/path/to/my-app":
     verification:
       test_command: ["sh", "-c", "swift run MyAppChecks"]
+solomon:
+  allowed_roots:      # parent folders of the projects `director.py do` may start through the server
+    - "/path/to"
 ```
 
 | Profile | Milestones | Automatic repairs | Builder attempts |
@@ -144,7 +151,7 @@ The console listens on `127.0.0.1` only. Requests that change state require a lo
 
 ## The project's past decisions
 
-HEAD and the reviewer do not remember earlier missions. So when the project has a change history file, its beginning (4,000 characters by default; the newest entries are assumed to be at the top) is shown to HEAD when it plans a milestone and to the reviewer. HEAD is told not to plan a step that reverses a recorded decision unless the goal asks for it, and the reviewer is told to report such a change.
+HEAD and the reviewer do not remember earlier missions. So when the project has a change history file, its beginning (4,000 characters by default; the newest entries are assumed to be at the top) is shown to HEAD (in chat, for the first ORDER and when it plans later milestones) and to the reviewer. HEAD is told not to plan a step that reverses a recorded decision unless the goal asks for it, and the reviewer is told to report such a change.
 
 - **Files looked for:** `CHANGELOG.md`, `docs/CHANGELOG.md`, `CHANGES.md`, `HISTORY.md`, `RELEASE_NOTES.md`, `DECISIONS.md`, `docs/DECISIONS.md`, in this order, in the project root. If none is there, sub-folders one level down are checked, and a file is used only when exactly one sub-folder has one.
 - **Where it is read:** always from the project itself. The copy in the worktree the BUILDER has just edited is not used.

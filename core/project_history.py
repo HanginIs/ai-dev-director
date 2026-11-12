@@ -109,6 +109,18 @@ def read(project_path: Optional[str], config: Optional[Dict[str, Any]] = None) -
     return {"file": rel, "text": text, "truncated": truncated}
 
 
+def attach(context: Dict[str, Any], project_path: Optional[str], config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Put the project's history into a HEAD context dict (under 'decision_history') when the project has one.
+    Always reads the project itself, also when the rest of the context describes a worktree."""
+    try:
+        history = read(project_path, config)
+    except Exception:
+        history = None
+    if history:
+        context["decision_history"] = history
+    return context
+
+
 def _quoted(history: Optional[Dict[str, Any]]) -> str:
     if not isinstance(history, dict) or not str(history.get("text") or "").strip():
         return ""
@@ -119,14 +131,15 @@ def _quoted(history: Optional[Dict[str, Any]]) -> str:
 
 
 def planning_block(history: Optional[Dict[str, Any]]) -> str:
-    """Prompt text for HEAD's step planning ('' when the project has no history file)."""
+    """Prompt text for HEAD, when it writes the first ORDER and when it plans a later step ('' when the project has
+    no history file)."""
     quoted = _quoted(history)
     if not quoted:
         return ""
     return (quoted +
             "These entries record decisions the project made on purpose. Do not plan a step that reverses one of "
-            "them unless the mission goal explicitly asks for that change; when the goal does ask for it, say so in "
-            "your summary. The history never widens what an ORDER may touch.\n\n")
+            "them unless the user's goal explicitly asks for that change; when the goal does ask for it, say so "
+            "plainly in your answer. The history never widens what an ORDER may touch.\n\n")
 
 
 def review_block(history: Optional[Dict[str, Any]]) -> str:
