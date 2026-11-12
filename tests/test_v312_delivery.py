@@ -6,6 +6,7 @@ mission applies itself under the auto_apply policy. Plus the goal-level bridge S
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -105,6 +106,32 @@ def test_apply_tree_delivers_into_the_project_and_blocks_on_conflicts(tmp_path, 
     assert rm.apply_tree(rid, request_id="dlv2-c")["status"] == "blocked"      # already applied
 
 
+def test_project_apply_lock_is_shared_by_other_processes(tmp_path, cleanup_runs):
+    import hashlib
+    from core.db_path import get_lock_dir
+    from core.file_lock import advisory_file_lock
+    from core.result_manager import _project_key
+
+    proj = project(tmp_path)
+    rid = "RUN-TEST-DLV-APPLY-LOCK"
+    cleanup_runs.append(rid)
+    wt = fake_run(proj, rid, snapshot(str(proj)))
+    (wt / "a.py").write_text("a = 2\n", encoding="utf-8")
+    reviewed(rid)
+    key = hashlib.sha256(_project_key(str(proj)).encode("utf-8")).hexdigest()
+    with advisory_file_lock(get_lock_dir() / f"apply-{key}.lock"):
+        child = subprocess.run(
+            [sys.executable, "-B", "-c",
+             "import sys; from core.result_manager import ResultManager; "
+             "rm = ResultManager(); print(rm.apply(sys.argv[1])['status']); "
+             "print(rm.apply_tree(sys.argv[1])['status'])", rid],
+            cwd=RUNS.parent, capture_output=True, text=True, check=True, timeout=20,
+        )
+        assert child.stdout.splitlines() == ["busy", "busy"]
+        assert (proj / "a.py").read_text(encoding="utf-8") == "a = 1\n"
+    assert ResultManager().apply_tree(rid)["status"] == "applied"
+
+
 def test_milestone_chain_resolves_to_the_project_snapshot_it_started_from(tmp_path, cleanup_runs):
     proj = project(tmp_path)
     base = snapshot(str(proj))
@@ -132,6 +159,64 @@ def test_milestone_chain_resolves_to_the_project_snapshot_it_started_from(tmp_pa
     (proj / "a.py").write_text("a = 1\n", encoding="utf-8")
     result = rm.apply_tree(r2, request_id="dlv3-mission")
     assert result["status"] == "applied" and result["files"] == ["a.py"]
+
+
+@pytest.mark.parametrize("change", ["edit", "delete", "create"])
+def test_apply_preserves_a_target_changed_after_conflict_check(tmp_path, cleanup_runs, monkeypatch, change):
+    proj = project(tmp_path)
+    rid = "RUN-TEST-DLV-LATE-" + change
+    cleanup_runs.append(rid)
+    wt = fake_run(proj, rid, snapshot(str(proj)))
+    name = "new.py" if change == "create" else "a.py"
+    (wt / name).write_text("from_builder = True\n", encoding="utf-8")
+    reviewed(rid)
+    rm = ResultManager()
+    preconditions = rm.tree_preconditions
+
+    def save_after_check(*args, **kwargs):
+        checked = preconditions(*args, **kwargs)
+        assert checked["ok"]
+        if change == "delete":
+            (proj / name).unlink()
+        else:
+            (proj / name).write_text("from_user = True\n", encoding="utf-8")
+        return checked
+
+    monkeypatch.setattr(rm, "tree_preconditions", save_after_check)
+    result = rm.apply_tree(rid)
+    assert result["status"] == "rolled_back"
+    assert "changed since it was checked" in result["reason"]
+    if change == "delete":
+        assert not (proj / name).exists()
+    else:
+        assert (proj / name).read_text(encoding="utf-8") == "from_user = True\n"
+
+
+@pytest.mark.parametrize("verifier_raises", [False, True])
+def test_apply_rollback_preserves_a_save_during_verification(tmp_path, cleanup_runs, monkeypatch, verifier_raises):
+    proj = project(tmp_path)
+    rid = f"RUN-TEST-DLV-ROLLBACK-EDIT-{verifier_raises}"
+    cleanup_runs.append(rid)
+    wt = fake_run(proj, rid, snapshot(str(proj)))
+    for name in ("a.py", "b.py", "new.py"):
+        (wt / name).write_text("from_builder = True\n", encoding="utf-8")
+    reviewed(rid)
+
+    def save_and_fail(**kwargs):
+        (proj / "a.py").write_text("from_user = True\n", encoding="utf-8")
+        (proj / "new.py").unlink()
+        if verifier_raises:
+            raise OSError("verifier failed to run")
+        return {"passed": False, "summary": "verification failed"}
+
+    monkeypatch.setattr("core.result_manager.Verifier.verify", save_and_fail)
+    result = ResultManager().apply_tree(rid)
+    assert result["status"] == "rolled_back"
+    assert result["rollback_errors"] == []
+    assert set(result["rollback_conflicts"]) == {"a.py", "new.py"}
+    assert (proj / "a.py").read_text(encoding="utf-8") == "from_user = True\n"
+    assert (proj / "b.py").read_text(encoding="utf-8") == "b = 1\n"
+    assert not (proj / "new.py").exists()
 
 
 @pytest.mark.parametrize("failure, expected", [("tests/test_old.py::test_old", "applied"),

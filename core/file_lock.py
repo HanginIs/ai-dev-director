@@ -20,6 +20,7 @@ import json
 import time
 import uuid
 import atexit
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -31,6 +32,27 @@ except Exception:  # pragma: no cover - psutil is a hard dependency elsewhere in
 
 class LockBusy(Exception):
     """Raised when the lock is held by another live process."""
+
+
+@contextmanager
+def advisory_file_lock(path: Path):
+    """Hold a kernel lock until the handle closes, including after process death."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            from errno import EACCES, EAGAIN
+            if exc.errno not in (EACCES, EAGAIN):
+                raise
+            raise LockBusy(f"lock {path.name} is held") from exc
+        yield
 
 
 class FileLock:

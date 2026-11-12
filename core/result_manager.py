@@ -12,13 +12,18 @@ import sys
 import json
 import hashlib
 import shutil
+import stat
 import subprocess
+import tempfile
 import threading
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
 from core.autopilot import only_preexisting_failures
+from core.db_path import get_lock_dir
+from core.file_lock import LockBusy, advisory_file_lock
 from core.state_machine import StateMachine, State
 from core.safety import SafetyPolicy
 from core.git_manager import GitManager
@@ -33,12 +38,50 @@ RESULT_BLOCKED = "APPLY_BLOCKED"
 NOTHING_TO_APPLY = "Nothing to apply: the project already has every file of this result"
 
 _APPLY_LOCK = threading.Lock()
-_APPLY_INFLIGHT: set = set()                       # project keys with an apply in progress
 _RECENT_APPLY_REQUESTS: Dict[str, str] = {}        # request_id -> status
 
 
 def _sha(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def _file_identity(path: Path):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        raise OSError(f"Not a regular file: {path.name}")
+    return [info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+
+
+def _file_state(path: Path):
+    identity = _file_identity(path)
+    if identity is None:
+        return None
+    digest = _sha(path)
+    if _file_identity(path) != identity:
+        raise OSError(f"File changed while reading: {path.name}")
+    return {"identity": identity, "sha256": digest}
+
+
+def _check_target(path: Path, expected) -> None:
+    if _file_state(path) != expected:
+        raise OSError(f"Project file changed since it was checked: {path.name}")
+
+
+def _replace_file(source: Path, target: Path, expected, digest: str) -> None:
+    descriptor, name = tempfile.mkstemp(prefix=".director-apply-", dir=target.parent)
+    os.close(descriptor)
+    temporary = Path(name)
+    try:
+        shutil.copy2(source, temporary)
+        if _sha(temporary) != digest:
+            raise OSError(f"Source changed while copying: {source.name}")
+        _check_target(target, expected)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _git(args: List[str], cwd: str) -> Tuple[int, str, str]:
@@ -430,6 +473,11 @@ class ResultManager:
                     if rel not in allowed_del:
                         blocks.append(f"Unauthorized deletion in result: {rel}"); continue
                     entry = {"path": rel, "type": "D", "source": None, "sha256": None, "size": 0, "deletion": True}
+                try:
+                    entry["target_before"] = _file_state(dst)
+                except OSError as exc:
+                    blocks.append(f"Cannot check target {rel}: {exc}")
+                    continue
                 manifest.append(entry)
             if builder_files and not builder_files.issubset({c["path"] for c in changes} | {b for b in builder_files if b not in {c["path"] for c in changes} and not (wt_root / b).exists()}):
                 pass  # builder may report files it later left unchanged; the git change set is the source of truth
@@ -445,15 +493,16 @@ class ResultManager:
                 blocks.append("Cannot read main working tree status")
             elif status.strip():
                 blocks.append("Working tree is not clean (tracked changes present)")
-            key = _project_key(proj)
-            with _APPLY_LOCK:
-                if key in _APPLY_INFLIGHT:
-                    blocks.append("Another apply is in progress for this project")
         return {"ok": not blocks, "blocks": blocks, "manifest": manifest, "project_path": proj, "worktree_path": wt,
                 "base_commit": (_git(["rev-parse", "HEAD"], wt)[1].strip() if wt and Path(wt).exists() else None)}
 
     # ------------------------------------------------------------------ apply & verify (human action)
     def apply(self, run_id: str, request_id: str = "", applied_by: str = "HUMAN", test_cmd: Optional[str] = None) -> Dict[str, Any]:
+        return self._apply_request(run_id, request_id, applied_by, test_cmd=test_cmd)
+
+    def _apply_request(self, run_id: str, request_id: str, applied_by: str, *,
+                       cumulative: Optional[bool] = None, on_conflict: str = "block",
+                       test_cmd: Optional[str] = None) -> Dict[str, Any]:
         rid = (request_id or "").strip() or hashlib.sha256(f"{run_id}{datetime.utcnow().isoformat()}".encode()).hexdigest()[:16]
         with _APPLY_LOCK:
             if rid in _RECENT_APPLY_REQUESTS:
@@ -461,26 +510,53 @@ class ResultManager:
             _RECENT_APPLY_REQUESTS[rid] = "inflight"
             while len(_RECENT_APPLY_REQUESTS) > 500:
                 _RECENT_APPLY_REQUESTS.pop(next(iter(_RECENT_APPLY_REQUESTS)))
-        pre = self.preconditions(run_id, allow_not_run=(applied_by == "HUMAN"))
-        if not pre["ok"]:
-            with _APPLY_LOCK:
-                _RECENT_APPLY_REQUESTS[rid] = "blocked"
-            if not self._result_is_final(run_id):
-                self._set_state(run_id, RESULT_BLOCKED, "; ".join(pre["blocks"]), rid)
-            self.sm.log_audit(run_id, applied_by, "RESULT_APPLY_BLOCKED", json.dumps({"blocks": pre["blocks"], "request_id": rid}, ensure_ascii=False))
-            return {"status": "blocked", "run_id": run_id, "blocks": pre["blocks"], "request_id": rid}
-        proj = pre["project_path"]; key = _project_key(proj)
-        with _APPLY_LOCK:
-            if key in _APPLY_INFLIGHT:
-                _RECENT_APPLY_REQUESTS[rid] = "busy"
-                return {"status": "busy", "run_id": run_id, "message": "another apply is in progress for this project"}
-            _APPLY_INFLIGHT.add(key)
+        retryable = False
         try:
-            return self._apply_locked(run_id, pre, rid, applied_by, test_cmd)
+            project = (self.sm.get_run(run_id) or {}).get("project_path")
+            lock = nullcontext()
+            if project:
+                key = hashlib.sha256(_project_key(project).encode("utf-8")).hexdigest()
+                lock = advisory_file_lock(get_lock_dir() / f"apply-{key}.lock")
+            with lock:
+                return self._apply_checked(run_id, rid, applied_by, cumulative, on_conflict, test_cmd)
+        except LockBusy:
+            retryable = True
+            return {"status": "busy", "run_id": run_id, "message": "another apply is in progress for this project"}
         finally:
             with _APPLY_LOCK:
-                _APPLY_INFLIGHT.discard(key)
-                _RECENT_APPLY_REQUESTS[rid] = "done"
+                if retryable:
+                    _RECENT_APPLY_REQUESTS.pop(rid, None)
+                elif _RECENT_APPLY_REQUESTS.get(rid) == "inflight":
+                    _RECENT_APPLY_REQUESTS[rid] = "done"
+
+    def _apply_checked(self, run_id: str, rid: str, applied_by: str, cumulative: Optional[bool],
+                       on_conflict: str, test_cmd: Optional[str]) -> Dict[str, Any]:
+        allow_not_run = applied_by == "HUMAN"
+        if cumulative is None:
+            pre = self.preconditions(run_id, allow_not_run=allow_not_run)
+        else:
+            pre = self.tree_preconditions(run_id, on_conflict=on_conflict, cumulative=cumulative,
+                                          allow_not_run=allow_not_run)
+            if pre["blocks"] == [NOTHING_TO_APPLY]:
+                self.sm.log_audit(run_id, applied_by, "RESULT_NOTHING_TO_APPLY", json.dumps({"request_id": rid}))
+                return {"status": "nothing_to_apply", "run_id": run_id, "files": [], "request_id": rid}
+        if not pre["ok"]:
+            if not pre.get("previous_run_applied") and not self._result_is_final(run_id):
+                self._set_state(run_id, RESULT_BLOCKED, "; ".join(pre["blocks"]), rid)
+            self.sm.log_audit(run_id, applied_by, "RESULT_APPLY_BLOCKED", json.dumps(
+                {"blocks": pre["blocks"], "request_id": rid}, ensure_ascii=False))
+            result = {"status": "blocked", "run_id": run_id, "blocks": pre["blocks"], "request_id": rid}
+            if cumulative is not None:
+                result["conflicts"] = pre["conflicts"]
+            return result
+        if cumulative is None:
+            return self._apply_locked(run_id, pre, rid, applied_by, test_cmd)
+        from core.bootstrap import configure_runtime
+        self.config = configure_runtime(self.config, pre["project_path"])
+        result = self._apply_locked(run_id, pre, rid, applied_by, None)
+        result["skipped_conflicts"] = pre["conflicts"]
+        result["deleted_not_applied"] = pre["deleted"]
+        return result
 
     def _apply_locked(self, run_id: str, pre: Dict[str, Any], rid: str, applied_by: str, test_cmd: Optional[str]) -> Dict[str, Any]:
         proj_root = Path(pre["project_path"]).resolve()
@@ -489,42 +565,61 @@ class ResultManager:
         self.sm.log_audit(run_id, applied_by, "RESULT_APPLY_STARTED", json.dumps(
             {"run_id": run_id, "project": str(proj_root), "files": [m["path"] for m in manifest], "hashes": {m["path"]: m["sha256"] for m in manifest},
              "source_commit": pre["base_commit"], "applied_by": applied_by, "timestamp": datetime.utcnow().isoformat(), "request_id": rid}, ensure_ascii=False))
-        # backup snapshot (Director-owned artifact under runs/<id>/apply_backup; the Builder never runs there)
         backup_dir = self.run_dir(run_id) / "apply_backup"
-        if backup_dir.exists():
-            shutil.rmtree(backup_dir)
-        backup_dir.mkdir(parents=True)
         backup_manifest = []
-        for m in manifest:
-            dst = proj_root / m["path"]
-            existed = dst.is_file()
-            entry = {"path": m["path"], "existed": existed, "sha256": _sha(dst) if existed else None}
-            if existed:
-                bp = backup_dir / m["path"]; bp.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(dst, bp)
-            backup_manifest.append(entry)
-        (backup_dir / "backup_manifest.json").write_text(json.dumps(backup_manifest, indent=2), encoding="utf-8")
-
-        applied: List[str] = []
+        applied: Dict[str, Any] = {}
         def rollback(reason: str, state: str) -> Dict[str, Any]:
             errors = []
+            conflicts = []
             for e in backup_manifest:
                 if e["path"] not in applied:
                     continue
                 dst = proj_root / e["path"]
                 try:
+                    expected = applied[e["path"]]
+                    if not SafetyPolicy.is_within_root(proj_root, dst) or _file_state(dst) != expected:
+                        conflicts.append(e["path"])
+                        continue
                     if e["existed"]:
-                        dst.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(backup_dir / e["path"], dst)
-                    elif dst.exists():
+                        _replace_file(backup_dir / e["path"], dst, expected, e["sha256"])
+                    elif expected is not None:
+                        _check_target(dst, expected)
                         dst.unlink()
                 except Exception as ex:
                     errors.append(f"{e['path']}: {ex}")
-            if not pre.get("previous_run_applied") or errors:
-                self._set_state(run_id, state, reason, rid, {"rollback_errors": errors})
-            self.sm.log_audit(run_id, applied_by, "RESULT_APPLY_ROLLED_BACK", json.dumps({"reason": reason[:500], "rollback_errors": errors, "request_id": rid}, ensure_ascii=False))
-            return {"status": "rolled_back", "run_id": run_id, "reason": reason, "rollback_errors": errors, "result_state": state, "request_id": rid}
+            if conflicts:
+                reason += "; later project edits preserved: " + ", ".join(conflicts)
+            details = {"rollback_errors": errors, "rollback_conflicts": conflicts}
+            if not pre.get("previous_run_applied") or errors or conflicts:
+                self._set_state(run_id, state, reason, rid, details)
+            self.sm.log_audit(run_id, applied_by, "RESULT_APPLY_ROLLED_BACK", json.dumps(
+                {"reason": reason[:500], **details, "request_id": rid}, ensure_ascii=False))
+            return {"status": "rolled_back", "run_id": run_id, "reason": reason, **details, "result_state": state, "request_id": rid}
 
         try:
+            # Check all targets before replacing any file or replacing the previous backup.
+            for m in manifest:
+                dst = proj_root / m["path"]
+                if not SafetyPolicy.is_within_root(proj_root, dst):
+                    raise OSError(f"Target escapes project: {m['path']}")
+                _check_target(dst, m["target_before"])
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir)
+            backup_dir.mkdir(parents=True)
+            for m in manifest:
+                dst = proj_root / m["path"]
+                before = m["target_before"]
+                if before is not None:
+                    bp = backup_dir / m["path"]
+                    bp.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(dst, bp)
+                    if _sha(bp) != before["sha256"]:
+                        raise OSError(f"Project file changed during backup: {m['path']}")
+                _check_target(dst, before)
+                backup_manifest.append({"path": m["path"], "existed": before is not None,
+                                        "sha256": before["sha256"] if before is not None else None})
+            (backup_dir / "backup_manifest.json").write_text(json.dumps(backup_manifest, indent=2), encoding="utf-8")
+
             for m in manifest:
                 rel = m["path"]; dst = proj_root / rel
                 if SafetyPolicy.is_control_plane_path(rel):
@@ -534,47 +629,45 @@ class ResultManager:
                 if dst.exists() and not SafetyPolicy.is_within_root(proj_root, dst):
                     raise RuntimeError(f"target escapes project at apply time: {rel}")
                 if m.get("deletion"):
-                    if dst.exists():
-                        dst.unlink()
-                    applied.append(rel)
+                    _check_target(dst, m["target_before"])
+                    dst.unlink()
+                    applied[rel] = None
                     continue
                 src = Path(m["source"])
-                if _sha(src) != m["sha256"]:
-                    raise RuntimeError(f"source changed since manifest: {rel}")
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                tmp = dst.with_name(dst.name + ".director_apply_tmp")
-                shutil.copy2(src, tmp)
-                os.replace(tmp, dst)
-                applied.append(rel)
-                if _sha(dst) != m["sha256"]:
+                _replace_file(src, dst, m["target_before"], m["sha256"])
+                written = _file_state(dst)
+                if written is None or written["sha256"] != m["sha256"]:
                     raise RuntimeError(f"hash mismatch after write: {rel}")
+                applied[rel] = written
         except Exception as e:
             return rollback(f"APPLY_FAILED: {e}", RESULT_APPLY_FAILED)
 
-        # verify in the main project with the same verifier
-        v = self.config.get("verification", {}) or {}
-        cmd = test_cmd if test_cmd is not None else v.get("test_command")
-        from core.bootstrap import resolve_test_command
-        cmd = resolve_test_command(cmd, str(proj_root))
-        verification = Verifier.verify(worktree_path=str(proj_root), build_cmd=v.get("build_command"), test_cmd=cmd, lint_cmd=v.get("lint_command"), git_checks=False,
-                                       timeout=verification_timeout(self.config))
-        post = self._load(run_id, "verification.json") or {}
-        evidence = self._load(run_id, "final_evidence.json") or {}
-        if not verification.get("passed") and evidence.get("baseline") == "PREEXISTING_FAILURES":
-            baseline = self._load(run_id, "baseline_verification.json")
-            unchanged = only_preexisting_failures(baseline, verification)
-            if unchanged and unchanged.issubset(post.get("preexisting_failures") or []):
-                verification["passed"] = True
-                verification["preexisting_failures"] = sorted(unchanged)
-                verification["summary"] += "; PRE-EXISTING FAILURES UNCHANGED"
-        self._save(run_id, "apply_verification.json", verification)
-        expected = int((post.get("test_counts") or {}).get("passed", 0) or 0)
-        got = int((verification.get("test_counts") or {}).get("passed", 0) or 0)
-        if not verification.get("passed") or (expected > 0 and got < expected):
-            return rollback(f"APPLY_VERIFY_FAILED: passed={verification.get('passed')} tests={got} expected>={expected}: {verification.get('summary')}", RESULT_VERIFY_FAILED)
-        for m in manifest:
-            if not m.get("deletion") and _sha(proj_root / m["path"]) != m["sha256"]:
-                return rollback(f"APPLY_VERIFY_FAILED: hash changed during verification: {m['path']}", RESULT_VERIFY_FAILED)
+        try:
+            from core.bootstrap import resolve_test_command
+            v = self.config.get("verification", {}) or {}
+            cmd = resolve_test_command(test_cmd if test_cmd is not None else v.get("test_command"), str(proj_root))
+            verification = Verifier.verify(worktree_path=str(proj_root), build_cmd=v.get("build_command"),
+                                           test_cmd=cmd, lint_cmd=v.get("lint_command"), git_checks=False,
+                                           timeout=verification_timeout(self.config))
+            post = self._load(run_id, "verification.json") or {}
+            evidence = self._load(run_id, "final_evidence.json") or {}
+            if not verification.get("passed") and evidence.get("baseline") == "PREEXISTING_FAILURES":
+                baseline = self._load(run_id, "baseline_verification.json")
+                unchanged = only_preexisting_failures(baseline, verification)
+                if unchanged and unchanged.issubset(post.get("preexisting_failures") or []):
+                    verification["passed"] = True
+                    verification["preexisting_failures"] = sorted(unchanged)
+                    verification["summary"] += "; PRE-EXISTING FAILURES UNCHANGED"
+            self._save(run_id, "apply_verification.json", verification)
+            expected = int((post.get("test_counts") or {}).get("passed", 0) or 0)
+            got = int((verification.get("test_counts") or {}).get("passed", 0) or 0)
+            if not verification.get("passed") or got < expected:
+                raise RuntimeError(f"passed={verification.get('passed')} tests={got} expected>={expected}: {verification.get('summary')}")
+            for rel, written in applied.items():
+                _check_target(proj_root / rel, written)
+        except Exception as exc:
+            return rollback(f"APPLY_VERIFY_FAILED: {exc}", RESULT_VERIFY_FAILED)
         self._set_state(run_id, RESULT_APPLIED, f"{len(manifest)} files applied and verified ({got} tests passed)", rid,
                         {"files": [m["path"] for m in manifest], "verification": verification.get("test_counts"),
                          "apply_scope": pre.get("apply_scope")})
@@ -735,6 +828,7 @@ class ResultManager:
         if rc1 or rc2:
             return {"ok": False, "blocks": ["cannot list worktree files"], "manifest": [], "conflicts": [], "deleted": []}
         candidates, conflicts = [], []
+        target_identities = {}
         for rel in dict.fromkeys(filter(None, tracked.split("\0") + others.split("\0"))):
             rel = rel.replace("\\", "/")
             if SafetyPolicy.is_control_plane_path(rel) or rel.startswith(".director_worktrees/"):
@@ -747,11 +841,16 @@ class ResultManager:
                 continue
             if dst.exists() and (not SafetyPolicy.is_within_root(proj_root, dst) or (dst.parent.exists() and not SafetyPolicy.is_within_root(proj_root, dst.parent))):
                 conflicts.append({"path": rel, "reason": "target escapes project"}); continue
+            try:
+                target_identities[rel] = _file_identity(dst)
+            except OSError as exc:
+                conflicts.append({"path": rel, "reason": str(exc)})
+                continue
             candidates.append(rel)
-        dst_paths = [rel for rel in candidates if (proj_root / rel).is_file()]
+        dst_paths = [rel for rel in candidates if target_identities[rel] is not None]
         src_ids = self._git_blob_ids(wt_root, candidates)
         dst_ids = self._git_blob_ids(proj_root, dst_paths)
-        if not cumulative and (len(src_ids) != len(candidates) or len(dst_ids) != len(dst_paths)):
+        if len(src_ids) != len(candidates) or len(dst_ids) != len(dst_paths):
             return {"ok": False, "blocks": ["Cannot compare run and project files"],
                     "manifest": [], "conflicts": [], "deleted": []}
         manifest, unchanged = [], 0
@@ -772,8 +871,16 @@ class ResultManager:
                     # is a conflict for a single run and for a whole mission alike.
                     conflicts.append({"path": rel, "reason": "removed in the project since the work started"}); continue
                 kind = "A"
+            try:
+                target_before = _file_state(dst)
+                if (target_before or {}).get("identity") != target_identities[rel]:
+                    raise OSError("changed while comparing project files")
+            except OSError as exc:
+                conflicts.append({"path": rel, "reason": str(exc)})
+                continue
             data = src.read_bytes()
-            manifest.append({"path": rel, "type": kind, "source": str(src), "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
+            manifest.append({"path": rel, "type": kind, "source": str(src), "sha256": hashlib.sha256(data).hexdigest(),
+                             "size": len(data), "target_before": target_before})
         present = set(candidates)
         deleted = [rel for rel in origin_blobs if rel not in present and (proj_root / rel).exists()
                    and not SafetyPolicy.is_control_plane_path(rel)]
@@ -803,9 +910,6 @@ class ResultManager:
             blocks.append("Project missing")
         if wt and proj and Path(wt).exists() and Path(proj).exists() and not self.worktree_contained(proj, wt):
             blocks.append("Worktree canonical containment failed")
-        with _APPLY_LOCK:
-            if _project_key(proj) in _APPLY_INFLIGHT:
-                blocks.append("Another apply is in progress for this project")
         if not blocks:
             blocks += self.review_drift(run_id, wt)
         tree = self.tree_manifest(run_id, cumulative=cumulative) if not blocks else {"manifest": [], "conflicts": [], "deleted": [], "blocks": [], "origin_ref": None}
@@ -857,44 +961,7 @@ class ResultManager:
         """Apply a mission chain or one run to the project: backup, copy, re-verify in the project, roll back on
         any failure. on_conflict: 'block' refuses when the user changed a file the AIs also changed; 'skip' leaves
         those files alone and applies the rest. Deletions are never applied."""
-        from core.bootstrap import configure_runtime
-        rid = (request_id or "").strip() or hashlib.sha256(f"{run_id}{datetime.utcnow().isoformat()}".encode()).hexdigest()[:16]
-        with _APPLY_LOCK:
-            if rid in _RECENT_APPLY_REQUESTS:
-                return {"status": "duplicate", "run_id": run_id, "request_id": rid}
-            _RECENT_APPLY_REQUESTS[rid] = "inflight"
-        pre = self.tree_preconditions(run_id, on_conflict=on_conflict, cumulative=cumulative,
-                                      allow_not_run=(applied_by == "HUMAN"))
-        if pre["blocks"] == [NOTHING_TO_APPLY]:
-            # The work changed nothing (a verification that found nothing to fix), or the project already holds it.
-            # That is an outcome, not a refusal: the result state is left alone and nothing reads as "blocked".
-            with _APPLY_LOCK:
-                _RECENT_APPLY_REQUESTS[rid] = "nothing"
-            self.sm.log_audit(run_id, applied_by, "RESULT_NOTHING_TO_APPLY", json.dumps({"request_id": rid}))
-            return {"status": "nothing_to_apply", "run_id": run_id, "files": [], "request_id": rid}
-        if not pre["ok"]:
-            with _APPLY_LOCK:
-                _RECENT_APPLY_REQUESTS[rid] = "blocked"
-            if not pre.get("previous_run_applied") and not self._result_is_final(run_id):
-                self._set_state(run_id, RESULT_BLOCKED, "; ".join(pre["blocks"]), rid)
-            self.sm.log_audit(run_id, applied_by, "RESULT_APPLY_BLOCKED", json.dumps({"blocks": pre["blocks"], "request_id": rid}, ensure_ascii=False))
-            return {"status": "blocked", "run_id": run_id, "blocks": pre["blocks"], "conflicts": pre["conflicts"], "request_id": rid}
-        proj = pre["project_path"]; key = _project_key(proj)
-        with _APPLY_LOCK:
-            if key in _APPLY_INFLIGHT:
-                _RECENT_APPLY_REQUESTS[rid] = "busy"
-                return {"status": "busy", "run_id": run_id, "message": "another apply is in progress for this project"}
-            _APPLY_INFLIGHT.add(key)
-        try:
-            self.config = configure_runtime(self.config, proj)          # per-project test command for the re-verify
-            result = self._apply_locked(run_id, pre, rid, applied_by, None)
-            result["skipped_conflicts"] = pre["conflicts"]
-            result["deleted_not_applied"] = pre["deleted"]
-            return result
-        finally:
-            with _APPLY_LOCK:
-                _APPLY_INFLIGHT.discard(key)
-                _RECENT_APPLY_REQUESTS[rid] = "done"
+        return self._apply_request(run_id, request_id, applied_by, cumulative=cumulative, on_conflict=on_conflict)
 
     # ------------------------------------------------------------------ discard (human action)
     def discard(self, run_id: str, request_id: str = "", by: str = "HUMAN") -> Dict[str, Any]:

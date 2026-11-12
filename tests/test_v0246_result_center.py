@@ -50,8 +50,8 @@ def _pass_run(proj, builder=_builder, test_cmd="python -m pytest -q tests/"):
 
 @pytest.fixture
 def rm(env):
-    from core.result_manager import _RECENT_APPLY_REQUESTS, _APPLY_INFLIGHT
-    _RECENT_APPLY_REQUESTS.clear(); _APPLY_INFLIGHT.clear()
+    from core.result_manager import _RECENT_APPLY_REQUESTS
+    _RECENT_APPLY_REQUESTS.clear()
     return ResultManager(config={"verification": {"test_command": "python -m pytest -q tests/"}})
 
 
