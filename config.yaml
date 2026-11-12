@@ -48,6 +48,12 @@ verification:
 bootstrap:
   enabled: true
 
+# Claude Code is started read-only for HEAD, the Reviewer, the proposal Builder and research (the Director writes
+# the files and runs the tests itself). See core/claude_cli.py for what each argument does. Needs Claude Code
+# 2.1.259 or later; uncomment and change for another version ([] removes the restriction).
+# claude_cli:
+#   read_only_args: ["--tools", "Read,Grep,Glob", "--disallowedTools", "mcp__*", "--permission-prompts", "none", "--setting-sources", "user"]
+
 # The project's own record of past decisions: the start of its change log (newest first) is shown to HEAD when it
 # plans a mission step and to the Reviewer, so a plan does not quietly reverse something the project decided on
 # purpose. The first of these files found in the project is used (root first, then one sub-folder).

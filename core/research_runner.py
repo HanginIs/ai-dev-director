@@ -62,7 +62,10 @@ class TriadResearchRunner:
             # Windows where synthesis/cross-critique evidence can exceed CreateProcess' command-line limit.
             return [executable, "exec", "--sandbox", "read-only", "-"], prompt, "codex exec --sandbox read-only - <stdin>"
         if domain == "ANTHROPIC":
-            return [executable, "--print", "--output-format", "json"], prompt, "claude --print --output-format json"
+            from core import claude_cli
+            read_only = claude_cli.read_only_args()
+            return ([executable, "--print", "--output-format", "json", *read_only], prompt,
+                    "claude --print --output-format json" + claude_cli.describe(read_only))
         if domain == "GOOGLE":
             # Official AGY stream-json mode reads NDJSON from stdin. This avoids Windows command-line limits
             # without file-read tools or permission bypasses, and exposes an explicit final result event.

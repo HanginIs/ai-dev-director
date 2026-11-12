@@ -104,8 +104,10 @@ class ClaudeHead(BaseHead):
         if not self.executable or not Path(self.executable).exists():
             raise RuntimeError(f"CONFIG_ERROR: Official Claude Code CLI not found at: {self.executable}")
 
-        cmd = [self.executable, "--print", "--output-format", "json"]
-        invocation_desc = "claude --print --output-format json"
+        from core import claude_cli
+        read_only = claude_cli.read_only_args()
+        cmd = [self.executable, "--print", "--output-format", "json", *read_only]
+        invocation_desc = "claude --print --output-format json" + claude_cli.describe(read_only)
         self.logger.info(f"[Claude Head] Invoking CLI via ProcessTreeRunner: {self.executable} (cwd={cwd})")
 
         sanitized_env = get_sanitized_env()
@@ -134,7 +136,8 @@ class ClaudeHead(BaseHead):
         if res.exit_code != 0:
             err_msg = res.stderr.strip() or res.stdout.strip()
             self.logger.error(f"Claude CLI exited with code {res.exit_code}: {err_msg}")
-            raise RuntimeError(f"Claude Code CLI execution failed (exit {res.exit_code}): {err_msg}")
+            raise RuntimeError(f"{claude_cli.old_cli_hint(res.exit_code, err_msg)}"
+                               f"Claude Code CLI execution failed (exit {res.exit_code}): {err_msg}")
 
         try:
             envelope = json.loads(res.stdout)

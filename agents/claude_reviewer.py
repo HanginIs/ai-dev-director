@@ -159,10 +159,12 @@ class ClaudeReviewer:
             "```"
         )
 
-        invocation_cmd = 'claude --print'
+        from core import claude_cli
+        read_only = claude_cli.read_only_args()
+        invocation_cmd = 'claude --print' + claude_cli.describe(read_only)
         self.logger.info(f"[Claude Reviewer] Invoking via ProcessTreeRunner: {self.executable} in {wt}")
 
-        cmd = [self.executable, "--print"]
+        cmd = [self.executable, "--print", *read_only]
         res = ProcessTreeRunner.run(
             argv=cmd,
             cwd=str(wt),
@@ -197,6 +199,7 @@ class ClaudeReviewer:
 
         if res.exit_code != 0:
             err_text = res.stderr or res.stdout
+            err_text = claude_cli.old_cli_hint(res.exit_code, err_text) + (err_text or "")
             self.logger.error(f"Claude CLI failed: {err_text}")
             return ReviewResultSchema(
                 verdict="changes_required",

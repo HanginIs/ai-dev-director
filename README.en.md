@@ -6,7 +6,7 @@ A local development director that runs three logged-in AI coding CLIs (Claude Co
 
 This repository is a fork of [ai-dev-director by DAVZD](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8, changed to work on macOS. The original is Windows-first. This fork adds a native macOS app and hardens how results are applied, how missions are judged and how repositories are handled.
 
-- **Status:** used daily on macOS. All 691 tests pass on macOS (2026-11-12; one test that pretends to be Windows is skipped).
+- **Status:** used daily on macOS. All 698 tests pass on macOS (2026-11-12; one test that pretends to be Windows is skipped).
 - **Not verified:** the changes in this fork have not been run on Windows or Linux. TRIAD research mode is the original feature unchanged; beyond passing unit tests it has not been verified in this fork.
 
 The console and all mission messages are in Korean.
@@ -30,7 +30,7 @@ goal ─▶ HEAD (writes an ORDER) ─▶ BUILDER (proposes file changes as JSON
 - macOS 13 or later
 - Python 3.9 or later, Git
 - Xcode (Swift 5.9 or later) to build the app
-- At least two logged-in CLIs: `claude`, `codex`, `agy`. Their subscription login sessions are used as they are. No API key is needed, and any key in the environment is removed before a CLI is called.
+- At least two logged-in CLIs: `claude` (Claude Code 2.1.259 or later), `codex`, `agy`. Their subscription login sessions are used as they are. No API key is needed, and any key in the environment is removed before a CLI is called.
 
 ## Install and run
 
@@ -92,6 +92,7 @@ When there is a result that passed, the line before it reads **"미션 전체 �
 | --- | --- |
 | No metered APIs | Every `*_API_KEY` is removed from the environment before a CLI is called. |
 | Project isolation | Building and editing happen only in worktrees under `.director_worktrees/`. |
+| Read-only roles | HEAD and the reviewer cannot write files or run commands. Codex runs in its read-only sandbox; Claude Code is started with the read tools only (Read, Grep, Glob), without the tools of connected apps and without the settings files of the project being worked on. |
 | Scope limits | The Director checks the allowed paths, protected paths, file count and changed-line count written in the ORDER. The BUILDER cannot relax them. |
 | A failed review is a failure | A missing or broken review reply counts as a failure, not a pass. |
 | Only what was reviewed is applied | The file contents at the moment of the pass are recorded and compared with the worktree right before applying. A worktree changed after review is not applied. |
@@ -205,6 +206,7 @@ Unit tests do not run the real CLIs and do not touch the working database. Integ
 - **Apply protection:** only reviewed files are applied, a file you deleted is a conflict, and the state of a result that was already applied is not overwritten.
 - **Mission verdicts:** a mission with no passed milestone is not shown as done, repeated verification failures that cannot be fixed end the mission, a "nothing has to change" answer is accepted, and follow-up missions prefer the current project state.
 - **Stop and recovery:** only the processes of the named mission are ended, and leftover runs are closed when the server starts.
+- **Claude started read-only:** the original started Claude Code without restrictions, so a Claude HEAD or reviewer could run commands in the worktree or reach the operator's connected apps. The arguments can be changed with `claude_cli.read_only_args` in `config.yaml`.
 - **Switching after a timeout:** when the BUILDER ends in a timeout, the next attempt goes to another CLI at once. The original called the same CLI once more before switching.
 - **Past decisions and change size:** the project's change history is shown to HEAD and the reviewer, and the total change of a mission is written in its final message.
 - **Repositories and database:** no repository is created inside another one; SQLite runs in WAL mode with a wait time.
