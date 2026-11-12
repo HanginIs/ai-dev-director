@@ -36,6 +36,15 @@ def connect(path=None, timeout: float = 30.0):
     return conn
 
 
+def get_runs_dir() -> Path:
+    """Where run evidence is kept. Under DIRECTOR_TESTING=1 the suite's TEST_RUNS_DIR keeps test runs out of the
+    source tree (the same isolation rule as get_db_path): one full suite used to leave a few hundred RUN-* folders
+    in <repo>/runs. (From digilogd-cmd/ai-dev-director PR #1 by edge0303.)"""
+    if os.environ.get("DIRECTOR_TESTING") == "1" and os.environ.get("TEST_RUNS_DIR"):
+        return Path(os.environ["TEST_RUNS_DIR"]).resolve()
+    return SOURCE_ROOT / "runs"
+
+
 def get_lock_dir() -> Path:
     """Directory for cross-process lock files (next to the DB; isolated under TEST_DB_PATH in tests)."""
     return get_db_path().parent / "locks"

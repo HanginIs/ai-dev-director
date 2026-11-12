@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import uuid
 from pathlib import Path
+from core.db_path import get_runs_dir
 
 import pytest
 
@@ -226,7 +227,7 @@ def test_review_prompt_quotes_the_history_before_the_diff(monkeypatch, tmp_path,
 
 # ------------------------------------------------------------------ mission-wide change size
 
-RUNS = Path(__file__).resolve().parents[1] / "runs"
+RUNS = get_runs_dir()
 
 
 @pytest.fixture

@@ -89,6 +89,10 @@ class TriadResearchRunner:
             return True
         if message.startswith("TIMEOUT:"):
             return True
+        lowered = message.lower()
+        if any(evidence in lowered for evidence in ("wsarecv", "connection attempt failed", "connection reset",
+                                                    "tls handshake timeout", "i/o timeout")):
+            return True    # the network dropped mid-request: the provider never judged the prompt
         return ErrorCategory.classify(message) == ErrorCategory.TIMEOUT
 
     def _invoke_once(self, domain: str, prompt: str, cwd: str, stage: str) -> Dict[str, Any]:

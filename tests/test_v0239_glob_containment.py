@@ -5,6 +5,7 @@ their static prefix is canonically checked; actual matched files are still resol
 import os
 import json
 from pathlib import Path
+from core.db_path import get_runs_dir
 
 import pytest
 
@@ -111,5 +112,5 @@ def test_final_gate_passes_with_glob_protected_paths(isolate_provider_db):
         assert ev["canonical_containment"] == "PASS" and ev["reasons"] == []
         summary = orch.resume(run_id)
         assert summary["final_state"] == "PASS"
-        saved = json.loads((Path("runs") / run_id / "final_evidence.json").read_text(encoding="utf-8"))
+        saved = json.loads((get_runs_dir() / run_id / "final_evidence.json").read_text(encoding="utf-8"))
         assert saved["canonical_containment"] == "PASS"

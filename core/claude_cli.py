@@ -8,6 +8,8 @@ the operator's connected apps.
   --tools Read,Grep,Glob      only these built-in tools exist in the session (no Bash, Edit, Write, sub-agents)
   --disallowedTools mcp__*    --tools does not cover MCP tools; this removes the operator's connectors
   --permission-prompts none   nobody is there to answer a prompt: deny instead of waiting (Claude Code >= 2.1.259)
+  --strict-mcp-config         do not even load the operator's MCP servers: their tool lists cost input tokens on
+                              every call (about 6.6k per call, measured in digilogd-cmd/ai-dev-director PR #1)
   --setting-sources user      ignore the settings files of the project being worked on: a Builder could write
                               .claude/settings.json with a hook, and a hook runs a command whatever the tools are
 
@@ -16,7 +18,7 @@ config.yaml `claude_cli.read_only_args` replaces the list (an empty list restore
 from typing import List
 
 DEFAULT_READ_ONLY_ARGS = ["--tools", "Read,Grep,Glob", "--disallowedTools", "mcp__*",
-                          "--permission-prompts", "none", "--setting-sources", "user"]
+                          "--permission-prompts", "none", "--setting-sources", "user", "--strict-mcp-config"]
 
 
 def read_only_args() -> List[str]:

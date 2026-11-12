@@ -13,7 +13,7 @@ from core.research_runner import TriadResearchRunner
 from schemas.order import OrderSchema
 
 EXPECTED = ["--tools", "Read,Grep,Glob", "--disallowedTools", "mcp__*", "--permission-prompts", "none",
-            "--setting-sources", "user"]
+            "--setting-sources", "user", "--strict-mcp-config"]
 ORDER = OrderSchema(goal="g", allowed_paths=["src/"], protected_paths=[".git/"], acceptance_criteria=["ok"])
 
 

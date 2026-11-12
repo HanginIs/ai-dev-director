@@ -106,7 +106,8 @@ class Orchestrator:
 
     def _get_run_dir(self, run_id: str) -> Path:
         base_dir = Path(__file__).resolve().parent.parent
-        run_dir = base_dir / "runs" / run_id
+        from core.db_path import get_runs_dir
+        run_dir = get_runs_dir() / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "logs").mkdir(exist_ok=True)
         return run_dir

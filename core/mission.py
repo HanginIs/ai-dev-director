@@ -50,7 +50,8 @@ class MissionStore:
                 mission["stopped_at"] = current.get("stopped_at")
         mission["updated_at"] = _now()
         self.base.mkdir(parents=True, exist_ok=True)
-        tmp = self._path(mission["mission_id"]).with_suffix(".tmp")
+        # one temp file per save: the mission thread and the console can save the same mission at the same moment
+        tmp = self._path(mission["mission_id"]).with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
         tmp.write_text(json.dumps(mission, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
         os.replace(tmp, self._path(mission["mission_id"]))
 

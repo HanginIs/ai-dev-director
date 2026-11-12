@@ -52,7 +52,7 @@ bootstrap:
 # the files and runs the tests itself). See core/claude_cli.py for what each argument does. Needs Claude Code
 # 2.1.259 or later; uncomment and change for another version ([] removes the restriction).
 # claude_cli:
-#   read_only_args: ["--tools", "Read,Grep,Glob", "--disallowedTools", "mcp__*", "--permission-prompts", "none", "--setting-sources", "user"]
+#   read_only_args: ["--tools", "Read,Grep,Glob", "--disallowedTools", "mcp__*", "--permission-prompts", "none", "--setting-sources", "user", "--strict-mcp-config"]
 
 # The project's own record of past decisions: the start of its change log (newest first) is shown to HEAD when it
 # plans a mission step and to the Reviewer, so a plan does not quietly reverse something the project decided on

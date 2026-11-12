@@ -22,6 +22,7 @@ from core.safety import SafetyPolicy
 from core.db_path import get_db_path, SOURCE_ROOT
 from schemas.order import OrderSchema
 from director import load_config
+from core.db_path import get_runs_dir
 from core.result_manager import ResultManager
 from core import autopilot
 from core.mission import MissionRunner, MissionStore, missions_to_resume, latest_deliverable
@@ -737,7 +738,7 @@ def build_activity_payload(limit_missions: int = 5) -> dict:
     missions = sorted(store.all(), key=lambda m: m.get("updated_at", ""), reverse=True)
     if not _USAGE_BACKFILLED["done"]:
         try:
-            usage.backfill_from_runs(DIRECTOR_ROOT / "runs", missions)
+            usage.backfill_from_runs(get_runs_dir(), missions)
         except Exception:
             pass
         _USAGE_BACKFILLED["done"] = True
@@ -1246,7 +1247,7 @@ def build_status_payload() -> dict:
     state = raw_state
     recovered = None
     if current_run and raw_state == State.FAIL:
-        recovery_path = Path(__file__).resolve().parent / "runs" / current_run['run_id'] / "recovery.json"
+        recovery_path = get_runs_dir() / current_run['run_id'] / "recovery.json"
         try:
             candidate = json.loads(recovery_path.read_text(encoding="utf-8"))
             if candidate.get("status") == "VERIFIED" and candidate.get("project_path") == current_run['project_path']:

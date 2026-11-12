@@ -6,6 +6,7 @@ import sys
 import json
 import shutil
 from pathlib import Path
+from core.db_path import get_runs_dir
 
 import pytest
 
@@ -97,7 +98,7 @@ def test_c_deciding_with_worktree_passes(isolate_provider_db):
         run_id, wt, sm = _deciding_run(proj, orch)
         summary = orch.resume(run_id)
         assert summary["final_state"] == State.PASS
-        ev = json.loads((Path("runs") / run_id / "final_evidence.json").read_text(encoding="utf-8"))
+        ev = json.loads((get_runs_dir() / run_id / "final_evidence.json").read_text(encoding="utf-8"))
         assert ev["worktree"] == "PRESENT" and ev["canonical_containment"] == "PASS"
         assert ev["baseline"] == "PASS" and ev["verification"] == "PASS" and ev["regression"] == "PASS"
         assert ev["reasons"] == [] and ev["reviewer_verdict"] == "pass"
@@ -118,7 +119,7 @@ def test_c_deciding_with_worktree_passes(isolate_provider_db):
             return ["src/n.py"]
         summary2 = _mock_orch(verification={}).run(proj, "g", builder_fn=_builder, order=OrderSchema(goal="g", allowed_paths=["src/"]))
         assert summary2["final_state"] == State.PASS
-        ev3 = json.loads((Path("runs") / summary2["run_id"] / "final_evidence.json").read_text(encoding="utf-8"))
+        ev3 = json.loads((get_runs_dir() / summary2["run_id"] / "final_evidence.json").read_text(encoding="utf-8"))
         assert ev3["worktree"] == "PRESENT" and ev3["canonical_containment"] == "PASS"
 
 

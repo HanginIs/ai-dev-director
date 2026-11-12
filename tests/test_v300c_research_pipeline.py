@@ -277,7 +277,7 @@ def test_9_official_cli_commands_are_read_only_and_subscription_only():
     assert codex == ["codex", "exec", "--sandbox", "read-only", "-"] and codex_stdin == "p"
     assert claude[:4] == ["claude", "--print", "--output-format", "json"] and claude_stdin == "p"
     assert claude[4:] == ["--tools", "Read,Grep,Glob", "--disallowedTools", "mcp__*",
-                          "--permission-prompts", "none", "--setting-sources", "user"]
+                          "--permission-prompts", "none", "--setting-sources", "user", "--strict-mcp-config"]
     assert google == ["agy", "--input-format", "stream-json", "--output-format", "stream-json", "--sandbox"]
     google_message = json.loads(google_stdin)
     assert google_message["event"] == "user"

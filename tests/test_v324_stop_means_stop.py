@@ -133,3 +133,36 @@ def test_guard_belongs_to_one_thread_only():
 def test_mission_thread_leaves_no_guard_behind(tmp_path, monkeypatch):
     stopped_mission(tmp_path, monkeypatch, "build")
     assert getattr(process_runner._STOP, "guard", None) is None
+
+
+# ------------------------------------------------------------------ test runs stay out of the source tree
+
+def test_suite_writes_run_evidence_outside_the_source_tree(tmp_path):
+    from core.db_path import SOURCE_ROOT, get_runs_dir
+    from core.result_manager import ResultManager
+    from tests.test_v0234_resume_parity import _mock_orch
+    runs = get_runs_dir()
+    assert SOURCE_ROOT not in runs.parents and runs != SOURCE_ROOT / "runs"
+    orch = _mock_orch()
+    assert orch._get_run_dir("RUN-TEST-RUNSDIR").parent == runs
+    assert ResultManager.run_dir("RUN-TEST-RUNSDIR").parent == runs
+    assert not (SOURCE_ROOT / "runs" / "RUN-TEST-RUNSDIR").exists()
+
+
+def test_runs_folder_override_only_applies_in_test_mode(monkeypatch, tmp_path):
+    from core.db_path import SOURCE_ROOT, get_runs_dir
+    monkeypatch.setenv("TEST_RUNS_DIR", str(tmp_path))
+    monkeypatch.setenv("DIRECTOR_TESTING", "0")
+    assert get_runs_dir() == SOURCE_ROOT / "runs"
+
+
+def test_mission_saves_do_not_share_one_temp_file(tmp_path, monkeypatch):
+    import os as _os
+    store = MissionStore(tmp_path / "missions")
+    used = []
+    real = _os.replace
+    monkeypatch.setattr("core.mission.os.replace", lambda src, dst: used.append(str(src)) or real(src, dst))
+    for _ in range(3):
+        store.save({"mission_id": "MSN-TMP", "status": "RUNNING", "steps": []})
+    assert len(set(used)) == 3 and store.load("MSN-TMP")["status"] == "RUNNING"
+    assert [p.name for p in (tmp_path / "missions").iterdir()] == ["MSN-TMP.json"]

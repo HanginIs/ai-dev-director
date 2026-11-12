@@ -6,7 +6,7 @@
 
 이 저장소는 [DAVZD의 ai-dev-director](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8을 macOS에서 쓰도록 고친 포크입니다. 원본은 Windows 우선이고, 이 포크는 macOS 전용 앱을 더하고 결과 반영·미션 판정·저장소 처리를 보강했습니다.
 
-- **상태:** macOS에서 매일 사용합니다. 전체 테스트 713개가 macOS에서 통과합니다(2026-11-13, Windows인 척하는 테스트 1개는 건너뜀).
+- **상태:** macOS에서 매일 사용합니다. 전체 테스트 721개가 macOS에서 통과합니다(2026-11-13, Windows인 척하는 테스트 1개는 건너뜀).
 - **미검증:** 이 포크의 변경분은 Windows와 Linux에서 실행해 보지 않았습니다. TRIAD 연구 모드는 원본 기능 그대로이며, 단위 테스트 통과 외에 이 포크에서 따로 검증하지 않았습니다.
 
 ## 하는 일
@@ -223,7 +223,7 @@ docs/                  설계 기록
 
 ## 크레딧과 라이선스
 
-원본은 DAVZD의 [ai-dev-director](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8입니다. 이 포크의 수정은 HanginIs가 했습니다. 고칠 항목은 Codex(OpenAI), Antigravity(Google), Claude(Anthropic) 세 AI가 각각 내놓은 코드 분석 결과를 종합해 정했고, 코드 수정과 테스트는 Claude와 함께 했습니다. 앱 아이콘은 이 포크를 위해 AI의 도움으로 만든 그림입니다(`macos/Assets/AppIcon.png`).
+원본은 DAVZD의 [ai-dev-director](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8입니다. 정지 처리, 테스트 실행 기록 분리, TRIAD 수정 몇 가지는 원본 저장소 [PR #1](https://github.com/digilogd-cmd/ai-dev-director/pull/1)(edge0303)에서 찾은 결함과 접근 방식을 이 포크의 코드에 맞춰 다시 구현한 것입니다. 이 포크의 수정은 HanginIs가 했습니다. 고칠 항목은 Codex(OpenAI), Antigravity(Google), Claude(Anthropic) 세 AI가 각각 내놓은 코드 분석 결과를 종합해 정했고, 코드 수정과 테스트는 Claude와 함께 했습니다. 앱 아이콘은 이 포크를 위해 AI의 도움으로 만든 그림입니다(`macos/Assets/AppIcon.png`).
 
 MIT License. `LICENSE` 파일을 보세요. 원본의 저작권 표시와 라이선스 문구를 그대로 유지합니다.
 

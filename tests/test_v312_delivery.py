@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from core.db_path import get_runs_dir
 
 import pytest
 
@@ -18,7 +19,7 @@ from core.result_manager import ResultManager
 from core.state_machine import StateMachine, State
 from tests.test_v301_companion_http import http_server, request  # noqa: F401
 
-RUNS = Path(__file__).resolve().parents[1] / "runs"
+RUNS = get_runs_dir()
 
 
 def git(cwd, *a):
@@ -125,7 +126,7 @@ def test_project_apply_lock_is_shared_by_other_processes(tmp_path, cleanup_runs)
              "import sys; from core.result_manager import ResultManager; "
              "rm = ResultManager(); print(rm.apply(sys.argv[1])['status']); "
              "print(rm.apply_tree(sys.argv[1])['status'])", rid],
-            cwd=RUNS.parent, capture_output=True, text=True, check=True, timeout=20,
+            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, check=True, timeout=20,
         )
         assert child.stdout.splitlines() == ["busy", "busy"]
         assert (proj / "a.py").read_text(encoding="utf-8") == "a = 1\n"

@@ -176,7 +176,7 @@ def _bridge_token() -> str:
 @click.option("--max-steps", type=int, help="Milestone budget for a new mission (default: autonomy.max_steps)")
 @click.option("--replan", help="With --mission-id: send the blocked step back to HEAD planning, with this reason")
 @click.option("--profile", type=click.Choice(["quick", "standard", "deep"]), default=None, help="Budget profile for a new mission")
-@click.option("--no-apply", is_flag=True, help="For a new mission: keep the result in the worktree instead of applying it to the project")
+@click.option("--no-apply", is_flag=True, help="Keep the result in the worktree instead of applying it to the project")
 def mission(project: str, goal: str, mission_id: Optional[str], max_steps: Optional[int], replan: Optional[str] = None,
             profile: Optional[str] = None, no_apply: bool = False):
     """Run a goal-driven mission: HEAD plans milestones and decides on your behalf until the goal is done."""
@@ -230,6 +230,10 @@ def mission(project: str, goal: str, mission_id: Optional[str], max_steps: Optio
                                    source="cli", auto_apply="off" if no_apply else None)["mission_id"]
         notify(f"미션 시작 {mission_id}")
     else:
+        if no_apply:                                    # --no-apply also holds for a mission that is continued
+            existing = runner.store.load(mission_id)
+            existing["auto_apply"] = "off"
+            runner.store.save(existing)
         if max_steps:
             existing = runner.store.load(mission_id)
             existing["max_steps"] = max(max_steps, len(existing["steps"]) + 1)

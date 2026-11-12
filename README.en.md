@@ -6,7 +6,7 @@ A local development director that runs three logged-in AI coding CLIs (Claude Co
 
 This repository is a fork of [ai-dev-director by DAVZD](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8, changed to work on macOS. The original is Windows-first. This fork adds a native macOS app and hardens how results are applied, how missions are judged and how repositories are handled.
 
-- **Status:** used daily on macOS. All 713 tests pass on macOS (2026-11-13; one test that pretends to be Windows is skipped).
+- **Status:** used daily on macOS. All 721 tests pass on macOS (2026-11-13; one test that pretends to be Windows is skipped).
 - **Not verified:** the changes in this fork have not been run on Windows or Linux. TRIAD research mode is the original feature unchanged; beyond passing unit tests it has not been verified in this fork.
 
 The console and all mission messages are in Korean.
@@ -225,7 +225,7 @@ Unit tests do not run the real CLIs and do not touch the working database. Integ
 
 ## Credits and license
 
-The original is [ai-dev-director](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8 by DAVZD. The changes in this fork were made by HanginIs. What to fix was decided by combining separate code reviews from three AIs: Codex (OpenAI), Antigravity (Google) and Claude (Anthropic). The code changes and tests were done with Claude. The app icon is AI-assisted artwork made for this fork (`macos/Assets/AppIcon.png`).
+The original is [ai-dev-director](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8 by DAVZD. The stop handling, the separate folder for test run records and a few TRIAD fixes reimplement, for this fork's code, defects and approaches from [PR #1](https://github.com/digilogd-cmd/ai-dev-director/pull/1) of the original repository (edge0303). The changes in this fork were made by HanginIs. What to fix was decided by combining separate code reviews from three AIs: Codex (OpenAI), Antigravity (Google) and Claude (Anthropic). The code changes and tests were done with Claude. The app icon is AI-assisted artwork made for this fork (`macos/Assets/AppIcon.png`).
 
 MIT License. See the `LICENSE` file. The original copyright notice and license text are kept as they are.
 

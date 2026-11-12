@@ -12,6 +12,7 @@ import contextlib
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
+from core.db_path import get_runs_dir
 
 import pytest
 
@@ -478,7 +479,7 @@ def test_l_order_caps_clamped_to_global_config(isolate_provider_db):
         oversized = OrderSchema(goal="g", allowed_paths=["src/"], max_files_changed=999, max_diff_lines=99999)
         summary = orch.run(proj, "g", builder_fn=builder, order=oversized)
         assert summary["final_state"] == State.HUMAN_REQUIRED          # 6 files > effective cap 4
-        saved = json.loads((Path("runs") / summary["run_id"] / "order.json").read_text(encoding="utf-8"))
+        saved = json.loads((get_runs_dir() / summary["run_id"] / "order.json").read_text(encoding="utf-8"))
         assert saved["max_files_changed"] == 4
         actions = [r["action"] for r in orch.sm._get_conn().execute(
             "SELECT action FROM audit_logs WHERE run_id=?", (summary["run_id"],)).fetchall()]

@@ -13,6 +13,7 @@ import shutil
 import urllib.error
 import urllib.request
 from pathlib import Path
+from core.db_path import get_runs_dir
 
 import pytest
 from click.testing import CliRunner
@@ -281,4 +282,16 @@ def test_step_evidence_carries_the_verification_status(tmp_path):
                         {"passed": True, "status": "NOT_RUN", "summary": "No build/test commands configured"})
         assert MissionRunner._evidence(orch, "RUN-TEST-EVIDENCE-NOTRUN")["verification_status"] == "NOT_RUN"
     finally:
-        shutil.rmtree(Path(__file__).resolve().parents[1] / "runs" / "RUN-TEST-EVIDENCE-NOTRUN", ignore_errors=True)
+        shutil.rmtree(get_runs_dir() / "RUN-TEST-EVIDENCE-NOTRUN", ignore_errors=True)
+
+
+def test_mission_command_no_apply_also_holds_for_a_continued_mission(mission_env, monkeypatch, tmp_path):
+    """From digilogd-cmd/ai-dev-director PR #1: --no-apply was ignored when a mission was resumed."""
+    saved = {"mission_id": "MSN-RESUME", "status": "INCOMPLETE", "auto_apply": "on_pass", "steps": []}
+    monkeypatch.setattr(MissionStore, "load", lambda self, mission_id: saved)
+    monkeypatch.setattr(MissionStore, "save", lambda self, mission, force=False: saved.update(mission))
+    monkeypatch.setattr(MissionRunner, "reopen", lambda self, mission_id: saved)
+    result = CliRunner().invoke(director.cli, ["mission", "-p", str(tmp_path), "-g", "g", "--mission-id", "MSN-RESUME",
+                                               "--no-apply"])
+    assert result.exit_code == 0, result.output
+    assert saved["auto_apply"] == "off" and mission_env["created"] == []
