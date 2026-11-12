@@ -1,4 +1,6 @@
-"""V3.0-G: Korean, read-only TRIAD Research Center (no real provider calls)."""
+"""Korean TRIAD Research Center (no real provider calls)."""
+from email.message import Message
+import io
 import json
 import sqlite3
 import threading
@@ -7,6 +9,7 @@ import urllib.request
 import pytest
 
 import dashboard_server
+from companion_server import CompanionHandler
 from core.db_path import get_db_path
 from core.research_state import ResearchState, ResearchStateMachine
 from core.state_machine import StateMachine
@@ -126,16 +129,58 @@ def test_g4_malformed_persisted_json_fails_closed_for_display_only():
     assert research["active"] is True
 
 
-def test_g5_html_separates_normal_and_triad_without_new_execution_post():
+def test_g5_html_separates_normal_and_triad_with_explicit_research_start():
     StateMachine()
     _seed_research()
     html = dashboard_server.render_html()
     for marker in (
         'id="normal-mode-btn"', 'id="triad-mode-btn"', 'id="triad-research-center"',
-        "TRIAD RESEARCH CENTER", "3개 독립 제안", "교차 비평", "합성 가설", "기각된 아이디어",
+        "TRIAD RESEARCH CENTER", "독립 제안", "교차 비평", "합성 가설", "기각된 아이디어",
         "배운 점", "다음 단계", 'id="research-raw"', 'id="main"', 'id="chat-form"',
     ):
         assert marker in html
     assert "setDashboardView" in html and "renderResearch" in html
-    assert 'action="/research"' not in html
+    assert 'action="/research/start"' in html
+    assert 'id="research-topic"' in html
+    for provider in ("OPENAI", "ANTHROPIC", "GOOGLE"):
+        assert f'type="checkbox" name="research-provider" value="{provider}" checked' in html
     assert "innerHTML" not in html
+
+
+def test_research_start_route_rejects_foreign_origin_and_invalid_input(monkeypatch):
+    topics = []
+    monkeypatch.setattr(dashboard_server, "start_dashboard_research",
+                        lambda topic, providers: topics.append((topic, tuple(providers))) or {"status": "started"})
+
+    def post(body, origin="http://127.0.0.1:8080", ajax="fetch"):
+        handler = CompanionHandler.__new__(CompanionHandler)
+        handler.server = type("Server", (), {"server_address": ("127.0.0.1", 8080)})()
+        handler.path = "/research/start"
+        handler.headers = Message()
+        handler.headers["Host"] = "127.0.0.1:8080"
+        handler.headers["Origin"] = origin
+        handler.headers["X-Requested-With"] = ajax
+        handler.headers["Content-Type"] = "application/json"
+        handler.headers["Content-Length"] = str(len(body))
+        handler.rfile = io.BytesIO(body)
+        handler.wfile = io.BytesIO()
+        statuses = []
+        handler.send_response = statuses.append
+        handler.send_header = lambda *_: None
+        handler.end_headers = lambda: None
+        handler.do_POST()
+        return statuses[0]
+
+    assert post(b'{"topic":"research"}', origin="https://example.invalid") == 403
+    assert post(b'{"topic":"research"}', ajax="") == 403
+    assert post(b'[]') == 400
+    assert post(b'{"topic":"research","mode":"unknown"}') == 400
+    assert topics == []
+    assert post(b'{"topic":"research"}') == 202
+    assert post(b'{"topic":"research","mode":"codex-claude"}') == 202
+    assert post(b'{"topic":"research","providers":["ANTHROPIC","GOOGLE"]}') == 202
+    assert topics == [
+        ("research", ("OPENAI", "ANTHROPIC", "GOOGLE")),
+        ("research", ("OPENAI", "ANTHROPIC")),
+        ("research", ("ANTHROPIC", "GOOGLE")),
+    ]

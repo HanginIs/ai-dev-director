@@ -13,7 +13,7 @@ TRIAD_DEGRADED - exactly one is unusable. A degraded 2-provider session is never
                  human approval before proceeding at all with two providers.
 TRIAD_BLOCKED  - two or three are unusable. A session cannot start.
 """
-from typing import Dict, List
+from typing import Dict, Iterable, List
 
 from core.provider_manager import ProviderManager
 
@@ -24,11 +24,12 @@ TRIAD_DEGRADED = "TRIAD_DEGRADED"
 TRIAD_BLOCKED = "TRIAD_BLOCKED"
 
 
-def assess_triad_readiness(pm: ProviderManager) -> Dict[str, object]:
+def assess_triad_readiness(pm: ProviderManager, excluded_domains: Iterable[str] = ()) -> Dict[str, object]:
     """Read-only snapshot of whether a TRIAD research cycle can start right now. Never mutates provider
     state beyond whatever ProviderManager.usable_domains() itself already does (nothing - it's a pure
     read of self.status_map plus trial-claim bookkeeping already owned by ProviderManager)."""
-    usable: List[str] = sorted(set(pm.usable_domains()) & set(ALL_TRIAD_DOMAINS))
+    excluded = set(excluded_domains) & set(ALL_TRIAD_DOMAINS)
+    usable: List[str] = sorted((set(pm.usable_domains()) & set(ALL_TRIAD_DOMAINS)) - excluded)
     missing: List[str] = sorted(set(ALL_TRIAD_DOMAINS) - set(usable))
 
     if not missing:
@@ -42,5 +43,6 @@ def assess_triad_readiness(pm: ProviderManager) -> Dict[str, object]:
         "state": state,
         "usable": usable,
         "missing": missing,
+        "excluded": sorted(excluded),
         "all_three_usable": not missing,
     }

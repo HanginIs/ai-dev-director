@@ -29,6 +29,7 @@ class ResearchState:
     INDEPENDENT_RESEARCH = "INDEPENDENT_RESEARCH"
     CROSS_CRITIQUE = "CROSS_CRITIQUE"
     SYNTHESIS = "SYNTHESIS"
+    SYNTHESIS_COMPLETE = "SYNTHESIS_COMPLETE"
     EXPERIMENT_PLANNING = "EXPERIMENT_PLANNING"
     EXPERIMENT_BUILDING = "EXPERIMENT_BUILDING"
     EXPERIMENT_VERIFYING = "EXPERIMENT_VERIFYING"
@@ -46,7 +47,7 @@ VALID_RESEARCH_TRANSITIONS: Dict[str, List[str]] = {
     ResearchState.RESEARCH_INTAKE: [ResearchState.INDEPENDENT_RESEARCH],
     ResearchState.INDEPENDENT_RESEARCH: [ResearchState.CROSS_CRITIQUE],
     ResearchState.CROSS_CRITIQUE: [ResearchState.SYNTHESIS],
-    ResearchState.SYNTHESIS: [ResearchState.EXPERIMENT_PLANNING],
+    ResearchState.SYNTHESIS: [ResearchState.EXPERIMENT_PLANNING, ResearchState.SYNTHESIS_COMPLETE],
     ResearchState.EXPERIMENT_PLANNING: [ResearchState.EXPERIMENT_BUILDING],
     ResearchState.EXPERIMENT_BUILDING: [ResearchState.EXPERIMENT_VERIFYING],
     ResearchState.EXPERIMENT_VERIFYING: [ResearchState.EXPERIMENT_REVIEW],
@@ -55,7 +56,10 @@ VALID_RESEARCH_TRANSITIONS: Dict[str, List[str]] = {
     ResearchState.NEXT_CYCLE: [ResearchState.RESEARCH_INTAKE],
 }
 
-TERMINAL_CYCLE_STAGES = {ResearchState.MILESTONE_COMPLETE, ResearchState.HUMAN_REQUIRED, ResearchState.RESEARCH_STOPPED}
+TERMINAL_CYCLE_STAGES = {
+    ResearchState.SYNTHESIS_COMPLETE, ResearchState.MILESTONE_COMPLETE,
+    ResearchState.HUMAN_REQUIRED, ResearchState.RESEARCH_STOPPED,
+}
 
 SESSION_STATUS_ACTIVE = "ACTIVE"
 SESSION_STATUS_MILESTONE_COMPLETE = "MILESTONE_COMPLETE"
@@ -118,6 +122,7 @@ class ResearchStateMachine:
                 ("current_cycle", "INTEGER NOT NULL DEFAULT 0"),
                 ("current_stage", "TEXT NOT NULL DEFAULT 'RESEARCH_INTAKE'"),
                 ("intake_evidence", "TEXT"),
+                ("synthesis_only", "INTEGER NOT NULL DEFAULT 0"),
             )
             for column, ddl in session_migrations:
                 if column not in session_columns:
@@ -295,7 +300,8 @@ class ResearchStateMachine:
     # ---------------------------------------------------------------- sessions
 
     def create_session(self, session_id: str, project_path: str, moonshot: str,
-                        project_type: str = "UNKNOWN", cycle_budget: int = DEFAULT_CYCLE_BUDGET) -> None:
+                        project_type: str = "UNKNOWN", cycle_budget: int = DEFAULT_CYCLE_BUDGET,
+                        synthesis_only: bool = False) -> None:
         if not session_id or not str(session_id).strip():
             raise ValueError("session_id is required")
         if not project_path or not str(project_path).strip():
@@ -308,10 +314,10 @@ class ResearchStateMachine:
         with self._get_conn() as conn:
             conn.execute(
                 "INSERT INTO research_sessions (session_id, project_path, moonshot, project_type, status, "
-                "cycle_budget, cycles_completed, stopped_reason, created_at, updated_at, mode, current_cycle, current_stage) "
-                "VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, 0, ?)",
+                "cycle_budget, cycles_completed, stopped_reason, created_at, updated_at, mode, current_cycle, "
+                "current_stage, synthesis_only) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, 0, ?, ?)",
                 (session_id, project_path, moonshot, project_type, SESSION_STATUS_ACTIVE, cycle_budget, now, now,
-                 RESEARCH_MODE_TRIAD, ResearchState.RESEARCH_INTAKE),
+                 RESEARCH_MODE_TRIAD, ResearchState.RESEARCH_INTAKE, int(synthesis_only)),
             )
             conn.commit()
 
@@ -589,6 +595,11 @@ class ResearchStateMachine:
                 "UPDATE research_sessions SET current_cycle=?, current_stage=?, updated_at=? WHERE session_id=?",
                 (cycle["cycle_number"], new_stage, now, cycle["session_id"]),
             )
+            if new_stage == ResearchState.SYNTHESIS_COMPLETE:
+                conn.execute(
+                    "UPDATE research_sessions SET status=?, cycles_completed=? WHERE session_id=?",
+                    (new_stage, cycle["cycle_number"], cycle["session_id"]),
+                )
             conn.commit()
         if new_stage in (ResearchState.MILESTONE_COMPLETE, ResearchState.RESEARCH_STOPPED, ResearchState.HUMAN_REQUIRED):
             # A completed cycle may already have been counted when it entered NEXT_CYCLE.  A later explicit

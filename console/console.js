@@ -186,13 +186,14 @@ setInterval(async()=>{try{const r=await fetch('/ops/roles',{cache:'no-store'});i
 (()=>{
  const b=document.getElementById('btn-halt');if(!b)return;
  b.onclick=async()=>{
-  if(!confirm('실행 중인 미션을 멈출까요?\n지금 돌고 있는 AI 프로세스를 끊고 미션을 정지 상태로 둡니다. 기록과 작업본은 남고, 나중에 재개할 수 있습니다.'))return;
+  if(!confirm('실행 중인 미션과 TRIAD 연구를 멈출까요?\n진행 중인 AI 호출을 중단하고 기록과 작업본은 보존합니다.'))return;
   b.disabled=true;const was=b.textContent;b.textContent='정지 중…';
   try{
    const roles=await fetch('/ops/roles',{cache:'no-store'}).then(r=>r.json());
    const r=await fetch('/ops/missions/stop',{method:'POST',headers:{'Content-Type':'application/json','X-Solomon-Bridge':roles.csrf},body:JSON.stringify({reason:'console 작업 정지 버튼'})});
    const j=await r.json();if(!r.ok)throw Error(j.error||'정지 실패');
-   alert(j.status==='stopped'?('미션 '+j.missions.join(', ')+' 정지 · AI 프로세스 '+j.killed.length+'개 종료'):'실행 중인 미션이 없습니다.');
+   const stopped=[j.missions.length?'미션 '+j.missions.join(', '):'',j.research_session_id?'TRIAD 연구':''].filter(Boolean);
+   alert(stopped.length?stopped.join(' · ')+' 정지 요청 · AI 프로세스 '+j.killed.length+'개 종료':'실행 중인 미션이나 TRIAD 연구가 없습니다.');
   }catch(e){alert('정지 실패 · '+e.message);}finally{b.disabled=false;b.textContent=was;}
  };
 })();

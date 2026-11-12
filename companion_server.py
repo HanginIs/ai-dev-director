@@ -229,6 +229,7 @@ class CompanionHandler(d.DashboardHandler):
             if 0 < unread <= 65536:
                 self.rfile.read(unread)
             self.server.stopping = True
+            d.stop_dashboard_research()
             logging.getLogger('director.companion').warning('shutdown requested from %s', self.headers.get('Referer') or 'local client')
             import threading
             threading.Thread(target=self.server.shutdown, name='director-shutdown', daemon=True).start()

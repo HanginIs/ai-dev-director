@@ -10,7 +10,8 @@ import psutil
 logger = logging.getLogger("director.process_runner")
 
 _ACTIVE: Dict[int, str] = {}          # pid -> executable, for every CLI the runner currently has alive
-_OWNER: Dict[int, Optional[str]] = {}  # pid -> mission that started it (None when started outside a mission)
+_OWNER: Dict[int, Optional[str]] = {}  # pid -> mission or research session that started it
+_HANDLES: Dict[int, subprocess.Popen] = {}
 _ACTIVE_LOCK = threading.Lock()
 
 
@@ -29,10 +30,11 @@ class OperationStopped(Exception):
 _STOP = threading.local()
 
 
-def set_stop_guard(guard: Optional[Callable[[], Optional[str]]]) -> None:
+def set_stop_guard(guard: Optional[Callable[[], Optional[str]]], *, owner_id: Optional[str] = None) -> None:
     """A guard returns a reason once the work running on this thread has been stopped, otherwise None. A mission
     installs one for its thread; while it reports a stop, no CLI is started and no run advances (check_stop)."""
     _STOP.guard = guard
+    _STOP.owner_id = owner_id
 
 
 def check_stop() -> None:
@@ -102,20 +104,32 @@ class ProcessTreeRunner:
 
     @classmethod
     def kill_active(cls, mission_id: Optional[str] = None) -> List[int]:
-        """작업 정지: kill the CLI processes the runner has alive (builder/reviewer/head) - all of them, or only those
-        a given mission started. Returns the pids killed."""
+        """Stop all active CLI processes, or only those belonging to the supplied mission or research ID."""
         killed = []
         with _ACTIVE_LOCK:
-            pids = [pid for pid in _ACTIVE if mission_id is None or _OWNER.get(pid) == mission_id]
-        for pid in pids:
+            targets = [(pid, _HANDLES.get(pid)) for pid in _ACTIVE
+                       if mission_id is None or _OWNER.get(pid) == mission_id]
+        for pid, process in targets:
+            stopped = process is not None and process.poll() is not None
             try:
-                if cls.kill_process_tree(pid):
-                    killed.append(pid)
+                if not stopped:
+                    stopped = cls.kill_process_tree(pid)
             except Exception as exc:
                 logger.warning(f"kill_active: pid {pid}: {exc}")
-            with _ACTIVE_LOCK:
-                _ACTIVE.pop(pid, None)
-                _OWNER.pop(pid, None)
+            if not stopped and process is not None:
+                # Process-table access can be blocked even when this runner owns the child.
+                try:
+                    process.kill()
+                    process.wait(timeout=1)
+                    stopped = True
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    logger.warning(f"kill_active: owned child {pid}: {exc}")
+            if stopped:
+                killed.append(pid)
+                with _ACTIVE_LOCK:
+                    _ACTIVE.pop(pid, None)
+                    _OWNER.pop(pid, None)
+                    _HANDLES.pop(pid, None)
         return killed
 
     @staticmethod
@@ -238,23 +252,25 @@ class ProcessTreeRunner:
 
         logger.info(f"[ProcessTreeRunner] Starting: {argv} (cwd={cwd}, timeout={timeout}s)")
 
-        # Start process with shell=False
-        process = subprocess.Popen(
-            argv,
-            cwd=cwd,
-            env=env,
-            shell=False,
-            stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace"
-        )
-        pid = process.pid
         with _ACTIVE_LOCK:
+            # A stop either prevents the spawn or sees its PID in the active process list.
+            check_stop()
+            process = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                env=env,
+                shell=False,
+                stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace"
+            )
+            pid = process.pid
             _ACTIVE[pid] = str(argv[0])
-            _OWNER[pid] = _current_mission()
+            _OWNER[pid] = getattr(_STOP, "owner_id", None) or _current_mission()
+            _HANDLES[pid] = process
 
         if stdin_data is not None:
             try:
@@ -320,6 +336,7 @@ class ProcessTreeRunner:
         with _ACTIVE_LOCK:
             _ACTIVE.pop(pid, None)
             _OWNER.pop(pid, None)
+            _HANDLES.pop(pid, None)
 
         if timed_out:
             # Terminate entire process tree using taskkill /PID <pid> /T /F

@@ -20,7 +20,8 @@ from core.greenfield import (
     assess_project_type,
     build_greenfield_baseline_evidence,
 )
-from core.provider_manager import ProviderManager
+from core.provider_manager import ProviderManager, ProviderStatus
+from core.process_runner import OperationStopped, check_stop, set_stop_guard
 from core.research_prompts import (
     build_cross_critique_prompt,
     build_experiment_order_prompt,
@@ -32,7 +33,12 @@ from core.research_prompts import (
     persist_stage_prompt,
 )
 from core.research_experiment import TriadExperimentOrchestrator
-from core.research_runner import TriadResearchRunner, cleanup_research_workspaces, create_research_workspaces
+from core.research_runner import (
+    ResearchProviderCallError,
+    TriadResearchRunner,
+    cleanup_research_workspaces,
+    create_research_workspaces,
+)
 from core.safety import SafetyPolicy
 from core.state_machine import State as NormalState
 from core.research_state import (
@@ -74,7 +80,8 @@ class ResearchOrchestrator:
                  provider_call: Optional[Callable[..., Dict[str, Any]]] = None,
                  research_runner: Optional[TriadResearchRunner] = None,
                  experiment_factory: Optional[Callable[..., TriadExperimentOrchestrator]] = None,
-                 experiment_config: Optional[Dict[str, Any]] = None):
+                 experiment_config: Optional[Dict[str, Any]] = None,
+                 stop_guard: Optional[Callable[[], Optional[str]]] = None):
         self.rsm = state_machine or ResearchStateMachine()
         self.pm = provider_manager or ProviderManager()
         self.artifact_root = Path(artifact_root) if artifact_root is not None else None
@@ -82,6 +89,7 @@ class ResearchOrchestrator:
         self.research_runner = research_runner
         self.experiment_factory = experiment_factory
         self.experiment_config = experiment_config
+        self.stop_guard = stop_guard
 
     @staticmethod
     def generate_session_id() -> str:
@@ -132,7 +140,9 @@ class ResearchOrchestrator:
                       allow_degraded: bool = False, session_id: Optional[str] = None,
                       verified_evidence: Optional[Dict[str, Any]] = None,
                       new_project: bool = False,
-                      existing_product_modification_request: bool = False) -> Dict[str, Any]:
+                      existing_product_modification_request: bool = False,
+                      synthesis_only: bool = False,
+                      excluded_domains: tuple[str, ...] = ()) -> Dict[str, Any]:
         """Create one session/cycle and enforce TRIAD readiness before any research provider can run."""
         context = self._project_context(project_path)
         project_evidence = assess_project_type(
@@ -140,12 +150,13 @@ class ResearchOrchestrator:
             user_explicit_new_project=bool(new_project),
             existing_product_modification_request=bool(existing_product_modification_request),
         )
-        readiness = assess_triad_readiness(self.pm)
+        readiness = assess_triad_readiness(self.pm, excluded_domains)
         sid = session_id or self.generate_session_id()
         cycle_id = f"{sid}-C1"
         self.rsm.create_session(
             sid, context["project_path"], user_challenge,
             project_type=project_evidence["project_type"], cycle_budget=cycle_budget,
+            synthesis_only=synthesis_only,
         )
         self.rsm.create_cycle(cycle_id, sid, 1)
         project_artifact = self._persist_project_evidence(sid, project_evidence)
@@ -185,9 +196,9 @@ class ResearchOrchestrator:
             human_required = True
             self.rsm.set_session_status(
                 sid, SESSION_STATUS_HUMAN_REQUIRED,
-                "TRIAD_BLOCKED: 두 개 이상의 provider를 사용할 수 없어 연구를 시작할 수 없습니다.",
+                "TRIAD_BLOCKED: 선택한 범위에서 사용할 수 있는 AI가 두 개 미만입니다.",
             )
-            message = "두 개 이상의 AI를 사용할 수 없어 TRIAD 연구를 시작할 수 없습니다."
+            message = "선택한 범위에서 사용할 수 있는 AI가 두 개 미만이라 연구를 시작할 수 없습니다."
 
         return self.session_summary(sid, message=message, human_required=human_required,
                                     prompt_artifacts=prompt_artifacts)
@@ -480,6 +491,9 @@ class ResearchOrchestrator:
         })
 
     def _invoke_one(self, domain: str, prompt: Dict[str, Any], stage: str, cwd: str) -> Dict[str, Any]:
+        if stage == ResearchState.INDEPENDENT_RESEARCH and domain in self.pm.trial_candidates:
+            if not self.pm.claim_trial(domain) and self.pm.get_status(domain) != ProviderStatus.HEALTHY:
+                raise ResearchProviderCallError(f"RECOVERY_TRIAL_UNAVAILABLE: {domain}")
         if self.provider_call is not None:
             return self.provider_call(domain=domain, prompt=prompt["prompt_text"], stage=stage, cwd=cwd)
         runner = self.research_runner or TriadResearchRunner()
@@ -488,6 +502,17 @@ class ResearchOrchestrator:
 
     def _invoke_concurrently(self, session: Dict[str, Any], cycle_id: str, stage: str,
                              prompts: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        def invoke(domain: str) -> Dict[str, Any]:
+            set_stop_guard(self.stop_guard, owner_id=session["session_id"])
+            try:
+                check_stop()
+                try:
+                    return self._invoke_one(domain, prompts[domain], stage, workspaces[domain])
+                finally:
+                    check_stop()
+            finally:
+                set_stop_guard(None)
+
         workspaces: Dict[str, str] = {}
         if self.provider_call is None:
             workspace_root = self._root() / session["session_id"] / cycle_id / "workspaces" / stage.lower()
@@ -498,13 +523,14 @@ class ResearchOrchestrator:
         try:
             with ThreadPoolExecutor(max_workers=len(prompts), thread_name_prefix=f"triad-{stage.lower()}") as pool:
                 futures = {
-                    pool.submit(self._invoke_one, domain, prompt, stage, workspaces[domain]): domain
-                    for domain, prompt in prompts.items()
+                    pool.submit(invoke, domain): domain for domain in prompts
                 }
                 for future in as_completed(futures):
                     domain = futures[future]
                     try:
                         results[domain] = {"ok": True, "result": future.result()}
+                    except OperationStopped:
+                        raise
                     except Exception as exc:
                         # `failure_result` (set only by TriadResearchRunner.invoke on total, non-retryable-or-
                         # exhausted failure) carries the last attempt's own metadata plus every prior FAILED
@@ -543,6 +569,8 @@ class ResearchOrchestrator:
             item = call_results[domain]
             if not item["ok"]:
                 failures.append(f"{domain}: {item['error']}")
+                if domain in self.pm.active_trials:
+                    self.pm.parse_cli_error(domain, item["error"])
                 self._record_call(session_id, cycle["cycle_id"], ResearchState.INDEPENDENT_RESEARCH,
                                   domain, prompts[domain], item.get("result"), "FAILED", item["error"])
                 self.rsm.set_participant_status(cycle["cycle_id"], domain, PARTICIPANT_STATUS_UNAVAILABLE)
@@ -555,6 +583,8 @@ class ResearchOrchestrator:
                 self._record_successful_output(session_id, cycle["cycle_id"], ResearchState.INDEPENDENT_RESEARCH,
                                                domain, prompts[domain], result, proposal)
                 self.rsm.set_participant_status(cycle["cycle_id"], domain, PARTICIPANT_STATUS_COMPLETE)
+                if domain in self.pm.active_trials:
+                    self.pm.record_success(domain)
             except Exception as exc:
                 error = f"INVALID_PROPOSAL: {type(exc).__name__}: {exc}"
                 failures.append(f"{domain}: {error}")
@@ -625,18 +655,22 @@ class ResearchOrchestrator:
             cycle["cycle_id"], ResearchState.INDEPENDENT_RESEARCH)}
         critiques = {r["domain"]: r["payload"] for r in self.rsm.get_stage_outputs(
             cycle["cycle_id"], ResearchState.CROSS_CRITIQUE)}
-        if "OPENAI" not in proposals:
+        synthesizer = "OPENAI"
+        if session.get("synthesis_only") and synthesizer not in proposals:
+            synthesizer = "ANTHROPIC"
+        if synthesizer not in proposals:
             return self._fail_cycle(session_id, cycle["cycle_id"], "SYNTHESIS_BLOCKED: Codex HEAD is unavailable")
         try:
-            envelope = build_synthesis_prompt(session["moonshot"], proposals, critiques, bool(session["degraded"]))
+            envelope = build_synthesis_prompt(session["moonshot"], proposals, critiques, bool(session["degraded"]),
+                                              provider_domain=synthesizer)
         except Exception as exc:
             return self._fail_cycle(session_id, cycle["cycle_id"], f"SYNTHESIS_EVIDENCE_INCOMPLETE: {exc}")
         prompt = persist_stage_prompt(self.rsm, session_id, cycle["cycle_id"], envelope, self.artifact_root)
-        calls = self._invoke_concurrently(session, cycle["cycle_id"], ResearchState.SYNTHESIS, {"OPENAI": prompt})
-        item = calls["OPENAI"]
+        calls = self._invoke_concurrently(session, cycle["cycle_id"], ResearchState.SYNTHESIS, {synthesizer: prompt})
+        item = calls[synthesizer]
         if not item["ok"]:
             self._record_call(session_id, cycle["cycle_id"], ResearchState.SYNTHESIS,
-                              "OPENAI", prompt, item.get("result"), "FAILED", item["error"])
+                              synthesizer, prompt, item.get("result"), "FAILED", item["error"])
             return self._fail_cycle(session_id, cycle["cycle_id"], f"SYNTHESIS_FAILED: {item['error']}")
         result = item["result"]
         try:
@@ -644,21 +678,30 @@ class ResearchOrchestrator:
                 self._coerce_list_fields(ResearchSynthesisSchema, self._extract_json(result.get("output")))
             ).model_dump()
             self._record_successful_output(session_id, cycle["cycle_id"], ResearchState.SYNTHESIS,
-                                           "OPENAI", prompt, result, synthesis)
+                                           synthesizer, prompt, result, synthesis)
         except Exception as exc:
             error = f"INVALID_SYNTHESIS: {type(exc).__name__}: {exc}"
             self._record_invalid_output(session_id, cycle["cycle_id"], ResearchState.SYNTHESIS,
-                                        "OPENAI", prompt, result, error)
+                                        synthesizer, prompt, result, error)
             return self._fail_cycle(session_id, cycle["cycle_id"], error)
-        self.rsm.transition_cycle(cycle["cycle_id"], ResearchState.EXPERIMENT_PLANNING,
-                                  details="Codex HEAD synthesized proposals and critiques without majority voting")
+        next_stage = (ResearchState.SYNTHESIS_COMPLETE if session.get("synthesis_only")
+                      else ResearchState.EXPERIMENT_PLANNING)
+        self.rsm.transition_cycle(cycle["cycle_id"], next_stage,
+                                  details=f"{synthesizer} synthesized proposals and critiques without majority voting")
+        if next_stage == ResearchState.SYNTHESIS_COMPLETE:
+            return self.session_summary(session_id, message="가설 합성을 완료했습니다.")
         return self.session_summary(session_id, message="통합 가설이 생성되어 실험 계획 단계로 전환했습니다.")
 
     def run_through_synthesis(self, session_id: str) -> Dict[str, Any]:
-        for operation in (self.run_independent_research, self.run_cross_critique, self.run_synthesis):
-            result = operation(session_id)
-            if result["human_required"]:
-                return result
+        try:
+            for operation in (self.run_independent_research, self.run_cross_critique, self.run_synthesis):
+                if self.stop_guard and (reason := self.stop_guard()):
+                    return self.stop_session(session_id, reason)
+                result = operation(session_id)
+                if result["human_required"]:
+                    return result
+        except OperationStopped as exc:
+            return self.stop_session(session_id, str(exc))
         return result
 
     # -------------------------------------------------------------- V3.0-E experiment integration
@@ -1136,7 +1179,8 @@ class ResearchOrchestrator:
         if next_number > int(session["cycle_budget"]) or self.rsm.cycle_budget_exhausted(session_id):
             return self.stop_session(session_id, "CYCLE_BUDGET_EXHAUSTED")
 
-        readiness = assess_triad_readiness(self.pm)
+        intake = json.loads(session.get("intake_evidence") or "{}")
+        readiness = assess_triad_readiness(self.pm, intake.get("excluded") or ())
         cycle_id = f"{session_id}-C{next_number}"
         self.rsm.create_cycle(cycle_id, session_id, next_number)
         self.rsm.register_participants(cycle_id, {
@@ -1170,6 +1214,8 @@ class ResearchOrchestrator:
         if not session:
             raise ValueError(f"unknown research session: {session_id}")
         cycle = self.rsm.list_cycles(session_id)[-1]
+        if cycle["stage"] == ResearchState.SYNTHESIS_COMPLETE:
+            return self.session_summary(session_id, message="가설 합성이 이미 완료됐습니다.")
         if cycle["stage"] not in {
             ResearchState.MILESTONE_COMPLETE, ResearchState.HUMAN_REQUIRED, ResearchState.RESEARCH_STOPPED
         }:

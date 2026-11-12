@@ -13,6 +13,9 @@ import uuid
 import re
 from typing import Optional
 import collections
+import logging
+import subprocess
+import tempfile
 
 from core.chat_manager import ChatManager
 from core.provider_manager import ProviderManager, FailoverMode, ProviderStatus
@@ -24,6 +27,7 @@ from schemas.order import OrderSchema
 from director import load_config
 from core.db_path import get_runs_dir
 from core.result_manager import ResultManager
+from core.triad_provider import ALL_TRIAD_DOMAINS
 from core import autopilot
 from core.mission import MissionRunner, MissionStore, missions_to_resume, latest_deliverable
 import dashboard_i18n as I18N
@@ -40,6 +44,9 @@ ACTIVE_RUN_WINDOW_SEC = 900            # a non-terminal run older than this is t
 # In-process guard against concurrent DEV_TASK execution (project key -> run_id)
 _RUN_LOCK = threading.Lock()
 _ACTIVE_PROJECTS = {}
+_RESEARCH_LOCK = threading.Lock()
+_RESEARCH_JOB = {"session_id": None, "busy": False, "error": ""}
+RESEARCH_TOPIC_LIMIT = 6000
 
 BUSY_MESSAGE = "BUSY: A run is already active for this project."
 
@@ -890,26 +897,21 @@ def is_stop_request(msg: str) -> bool:
 
 
 def stop_missions(reason: str = "", mission_id: Optional[str] = None, by: str = "사용자") -> dict:
-    """작업 정지: mark RUNNING missions STOPPED and kill the CLI processes working on them. The dashboard stays up.
-    Records and worktrees are kept; the mission can be continued later with reopen (decide: extend/replan)."""
+    """Stop the specified mission, or stop all running missions and console research."""
     from core.mission import stop_request
     from core.process_runner import ProcessTreeRunner
+    research_id, killed = (None, []) if mission_id else stop_dashboard_research()
     store = MissionStore()
     targets = [m for m in store.all() if m.get("status") == "RUNNING" and (not mission_id or m["mission_id"] == mission_id)]
     stopped = [stop_request(m["mission_id"], reason, by, store)["mission_id"] for m in targets]
-    killed = []
-    if stopped:
-        still_running = [m for m in store.all() if m.get("status") == "RUNNING"]
-        if mission_id and still_running:
-            # other missions keep working: kill only what the stopped mission started
-            killed = ProcessTreeRunner.kill_active(mission_id)
-        else:
-            killed = ProcessTreeRunner.kill_active()
+    for stopped_id in stopped:
+        killed.extend(ProcessTreeRunner.kill_active(stopped_id))
     sid = active_session_id()
     if stopped:
         ChatManager().add_message(sid, "SYSTEM", f"[{by}] 작업 정지: 미션 {', '.join(stopped)} 정지 · 실행 중이던 AI 프로세스 {len(killed)}개 종료 · 기록과 작업본은 남습니다" + (f" · 사유: {reason[:200]}" if reason else ""))
     invalidate_status_cache()
-    return {"status": "stopped" if stopped else "idle", "missions": stopped, "killed": killed}
+    return {"status": "stopped" if stopped or research_id else "idle", "missions": stopped,
+            "research_session_id": research_id, "killed": killed}
 
 
 def decide_mission(mission_id: str, action: str, reason: str = "", max_steps: Optional[int] = None,
@@ -1338,9 +1340,10 @@ def build_status_payload() -> dict:
 
 _RESEARCH_STAGE_KO = {
     "RESEARCH_INTAKE": "연구 준비",
-    "INDEPENDENT_RESEARCH": "3개 독립 제안",
+    "INDEPENDENT_RESEARCH": "독립 제안",
     "CROSS_CRITIQUE": "교차 비평",
     "SYNTHESIS": "가설 합성",
+    "SYNTHESIS_COMPLETE": "가설 합성 완료",
     "EXPERIMENT_PLANNING": "실험 계획",
     "EXPERIMENT_BUILDING": "실험 구현",
     "EXPERIMENT_VERIFYING": "실험 검증",
@@ -1351,6 +1354,87 @@ _RESEARCH_STAGE_KO = {
     "HUMAN_REQUIRED": "사용자 확인 필요",
     "RESEARCH_STOPPED": "연구 중지",
 }
+
+
+def stop_dashboard_research() -> tuple[Optional[str], list[int]]:
+    from core.process_runner import ProcessTreeRunner
+
+    with _RESEARCH_LOCK:
+        if not _RESEARCH_JOB["busy"]:
+            return None, []
+        session_id = _RESEARCH_JOB["session_id"]
+        _RESEARCH_JOB["stop_event"].set()
+    invalidate_status_cache()
+    return session_id, ProcessTreeRunner.kill_active(session_id)
+
+
+def start_dashboard_research(topic: str, selected_domains=ALL_TRIAD_DOMAINS) -> dict:
+    """Start one text-only research session on this local dashboard."""
+    from core.research_orchestrator import ResearchOrchestrator
+
+    topic = topic.strip() if isinstance(topic, str) else ""
+    if not 1 <= len(topic) <= RESEARCH_TOPIC_LIMIT:
+        return {"status": "error", "message": f"연구 주제를 {RESEARCH_TOPIC_LIMIT}자 이내로 입력하세요."}
+    if (not isinstance(selected_domains, (list, tuple))
+            or len(selected_domains) not in (2, 3)
+            or not all(isinstance(domain, str) and domain in ALL_TRIAD_DOMAINS for domain in selected_domains)
+            or len(set(selected_domains)) != len(selected_domains)):
+        return {"status": "error", "message": "연구에 참여할 AI를 두 개 이상 선택하세요."}
+    selected_domains = tuple(selected_domains)
+    excluded_domains = tuple(domain for domain in ALL_TRIAD_DOMAINS if domain not in selected_domains)
+    with _RESEARCH_LOCK:
+        if _RESEARCH_JOB["busy"]:
+            return {"status": "busy", "session_id": _RESEARCH_JOB["session_id"],
+                    "message": "이미 TRIAD 연구가 진행 중입니다."}
+        session_id = ResearchOrchestrator.generate_session_id()
+        stop_event = threading.Event()
+        _RESEARCH_JOB.update(session_id=session_id, busy=True, error="", stop_event=stop_event)
+    invalidate_status_cache()
+
+    def stop_reason():
+        return "사용자가 TRIAD 연구를 정지했습니다." if stop_event.is_set() else None
+
+    def run():
+        error = ""
+        try:
+            with tempfile.TemporaryDirectory(prefix="director-triad-") as folder:
+                project = Path(folder)
+                subprocess.run(["git", "init", "-q", "--template="], cwd=project,
+                               check=True, capture_output=True, timeout=20)
+                subprocess.run(
+                    ["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                     "-c", "user.name=AI Dev Director", "-c", "user.email=triad@localhost",
+                     "commit", "-q", "--allow-empty", "-m", "TRIAD research input"],
+                    cwd=project, check=True, capture_output=True, timeout=20,
+                )
+                providers = ProviderManager()
+                providers.mark_trial_candidates(only=list(selected_domains))
+                orch = ResearchOrchestrator(provider_manager=providers,
+                                            artifact_root=get_db_path().parent / "research",
+                                            stop_guard=stop_reason)
+                summary = orch.start_session(str(project), topic, cycle_budget=1, session_id=session_id,
+                                             new_project=True, synthesis_only=True,
+                                             allow_degraded=bool(excluded_domains), excluded_domains=excluded_domains)
+                if stop_event.is_set():
+                    orch.stop_session(session_id, stop_reason())
+                elif not summary["human_required"]:
+                    orch.run_through_synthesis(session_id)
+        except Exception:
+            error = "TRIAD 연구를 실행하는 중 오류가 발생했습니다. Director 서버 로그를 확인하세요."
+            logging.getLogger(__name__).exception("TRIAD research failed: %s", session_id)
+        finally:
+            with _RESEARCH_LOCK:
+                _RESEARCH_JOB.update(busy=False, error=error)
+            invalidate_status_cache()
+
+    try:
+        threading.Thread(target=run, name=f"director-research-{session_id}", daemon=True).start()
+    except RuntimeError:
+        with _RESEARCH_LOCK:
+            _RESEARCH_JOB.update(busy=False, error="TRIAD 연구 작업을 시작하지 못했습니다.")
+        invalidate_status_cache()
+        return {"status": "error", "message": "TRIAD 연구 작업을 시작하지 못했습니다."}
+    return {"status": "started", "session_id": session_id, "message": "TRIAD 연구 시작 요청을 받았습니다."}
 
 
 def _research_json(value, fallback):
@@ -1370,6 +1454,12 @@ def build_research_status_payload(session_id: Optional[str] = None) -> dict:
     Importantly, this does not construct ``ResearchStateMachine``: an old/frozen production DB with no
     V3 tables is observed as unavailable instead of being migrated by a GET request.
     """
+    with _RESEARCH_LOCK:
+        job = dict(_RESEARCH_JOB)
+    current_job = job["busy"] or bool(job["error"])
+    if session_id is None and current_job:
+        session_id = job["session_id"]
+    tracks_job = current_job and session_id == job["session_id"]
     empty = {
         "mode": "TRIAD_RESEARCH", "available": False, "active": False, "session_id": None,
         "moonshot": "", "project_path": "", "status": "NONE", "cycle_number": 0,
@@ -1377,8 +1467,13 @@ def build_research_status_payload(session_id: Optional[str] = None) -> dict:
         "proposals": [], "cross_critiques": [], "synthesis": None, "experiment": None,
         "evidence": {}, "interpretations": [], "rejected_ideas": [], "what_we_learned": "",
         "next_step": "TRIAD 연구 세션을 시작하면 여기에 진행 상황이 표시됩니다.",
-        "provenance": [],
+        "provenance": [], "worker_busy": job["busy"], "readiness": None, "missing_domains": [],
     }
+    if tracks_job:
+        empty.update(session_id=session_id, active=job["busy"],
+                     status="ACTIVE" if job["busy"] else "HUMAN_REQUIRED",
+                     current_stage_ko="연구 준비" if job["busy"] else "사용자 확인 필요",
+                     next_step=job["error"] or "격리된 연구 작업공간을 준비하고 있습니다.")
     required = {
         "research_sessions", "research_cycles", "research_stage_outputs", "research_call_provenance",
         "research_experiments", "research_baseline_evidence", "research_memory",
@@ -1491,12 +1586,14 @@ def build_research_status_payload(session_id: Optional[str] = None) -> dict:
         })
 
     stage = (dict(cycle).get("stage") if cycle else s.get("current_stage")) or "NONE"
-    active = s.get("status") == "ACTIVE"
+    status = s.get("status", "UNKNOWN")
+    active = status == "ACTIVE"
     next_step = latest_memory.get("next_direction") or {
         "RESEARCH_INTAKE": "세 제공자의 준비 상태를 확인합니다.",
         "INDEPENDENT_RESEARCH": "서로 격리된 세 제안을 수집합니다.",
         "CROSS_CRITIQUE": "제안의 약점과 결합 가능성을 교차 검토합니다.",
         "SYNTHESIS": "실험 가능한 단일 가설을 합성합니다.",
+        "SYNTHESIS_COMPLETE": "독립 제안, 교차 비평, 가설 합성을 완료했습니다.",
         "EXPERIMENT_PLANNING": "안전한 실험 ORDER를 작성합니다.",
         "EXPERIMENT_BUILDING": "NORMAL 안전 파이프라인으로 실험을 구현합니다.",
         "EXPERIMENT_VERIFYING": "실험 결과와 회귀를 검증합니다.",
@@ -1504,10 +1601,21 @@ def build_research_status_payload(session_id: Optional[str] = None) -> dict:
         "RESULT_INTERPRETATION": "세 연구자가 결과를 독립 해석합니다.",
         "NEXT_CYCLE": "학습 내용을 반영해 다음 사이클을 준비합니다.",
     }.get(stage, s.get("stopped_reason") or "")
+    if status == "HUMAN_REQUIRED" and s.get("stopped_reason"):
+        next_step = s["stopped_reason"]
+    if s.get("synthesis_only") and active and not (tracks_job and job["busy"]):
+        active = False
+        status = "HUMAN_REQUIRED" if tracks_job and job["error"] else "INTERRUPTED"
+        next_step = (job["error"] if tracks_job else "") or "Director가 종료되어 연구가 중단됐습니다. 새로 시작할 수 있습니다."
     return {
         "mode": "TRIAD_RESEARCH", "available": True, "active": active,
         "session_id": s.get("session_id"), "moonshot": s.get("moonshot", ""),
-        "project_path": s.get("project_path", ""), "status": s.get("status", "UNKNOWN"),
+        "project_path": s.get("project_path", ""), "status": status,
+        "worker_busy": job["busy"], "readiness": s.get("readiness_state"),
+        "synthesis_only": bool(s.get("synthesis_only")),
+        "excluded_domains": _research_json(s.get("intake_evidence"), {}).get("excluded", []),
+        "synthesis_domain": synthesis_rows[-1]["domain"] if synthesis_rows else None,
+        "missing_domains": _research_json(s.get("missing_domains"), []),
         "cycle_number": int(dict(cycle).get("cycle_number") or 0) if cycle else int(s.get("current_cycle") or 0),
         "cycle_budget": int(s.get("cycle_budget") or 0), "current_stage": stage,
         "current_stage_ko": _RESEARCH_STAGE_KO.get(stage, stage), "proposals": proposals,
@@ -2027,13 +2135,48 @@ DASHBOARD_JS = r"""
     });
     if (!(items || []).length) { var li = document.createElement('li'); li.className = 'research-empty'; li.textContent = '아직 기록된 내용이 없습니다.'; el.appendChild(li); }
   }
+  var researchSubmitting = false;
+  var researchWorkerBusy = false;
+  var submittedResearchId = null;
+  var researchStartButton = document.getElementById('research-start-btn');
+  var researchProviderInputs = Array.from(document.querySelectorAll('input[name="research-provider"]'));
+  function selectedResearchDomains() {
+    return researchProviderInputs.filter(function (input) { return input.checked; })
+      .map(function (input) { return input.value; });
+  }
+  function updateResearchButton() {
+    if (researchStartButton) {
+      researchStartButton.disabled = researchSubmitting || researchWorkerBusy || selectedResearchDomains().length < 2;
+    }
+  }
   function renderResearch(r) {
     r = r || {};
+    researchWorkerBusy = Boolean(r.worker_busy);
+    updateResearchButton();
     setText('research-session-id', r.session_id || '없음');
     setText('research-moonshot', r.moonshot || 'TRIAD 연구 세션이 없습니다.');
     setText('research-cycle', (r.cycle_number || 0) + ' / ' + (r.cycle_budget || 0));
     setText('research-stage', r.current_stage_ko || r.current_stage || '연구 없음');
     setText('research-status', r.status || 'NONE');
+    var providerNames = {OPENAI: 'Codex', ANTHROPIC: 'Claude Code', GOOGLE: 'Antigravity'};
+    var excluded = r.excluded_domains || [];
+    var missing = (r.missing_domains || []).filter(function (name) { return !excluded.includes(name); })
+      .map(function (name) { return providerNames[name] || name; });
+    var participants = Object.keys(providerNames).filter(function (name) { return !excluded.includes(name); })
+      .map(function (name) { return providerNames[name]; });
+    setText('research-readiness', missing.length ? '준비되지 않은 AI · ' + missing.join(', ')
+      : r.readiness ? participants.length + '개 AI · ' + participants.join(', ') : '');
+    if (r.session_id === submittedResearchId) {
+      if (r.status === 'HUMAN_REQUIRED' || r.status === 'INTERRUPTED') {
+        setText('research-submit-status', missing.length
+          ? missing.join(', ') + ' 준비 상태 때문에 연구가 중단됐습니다.'
+          : '연구가 중단됐습니다. 아래 다음 단계에서 이유를 확인하세요.');
+      } else if (r.status === 'SYNTHESIS_COMPLETE') {
+        setText('research-submit-status', '가설 합성을 완료했습니다.');
+      } else if (r.status === 'RESEARCH_STOPPED') {
+        setText('research-submit-status', '연구를 정지했습니다.');
+      }
+    }
     replaceList('research-proposals', r.proposals, function (p) {
       return (p.domain || 'AI') + ' · ' + (p.hypothesis || '가설 없음') + (p.confidence === null || p.confidence === undefined ? '' : ' · 신뢰도 ' + p.confidence);
     });
@@ -2042,6 +2185,7 @@ DASHBOARD_JS = r"""
     });
     var syn = r.synthesis || {};
     setText('research-synthesis', syn.synthesized_hypothesis || syn.title || '아직 합성된 가설이 없습니다.');
+    setText('research-synthesizer', r.synthesis_domain ? '합성 · ' + (providerNames[r.synthesis_domain] || r.synthesis_domain) : '');
     var exp = r.experiment || {};
     setText('research-experiment', exp.goal || exp.status || '아직 계획된 실험이 없습니다.');
     var ev = r.evidence || {};
@@ -2055,7 +2199,13 @@ DASHBOARD_JS = r"""
     setText('research-next', r.next_step || '다음 단계가 정해지지 않았습니다.');
     var raw = document.getElementById('research-raw'); if (raw) raw.textContent = JSON.stringify(r, null, 2);
     var badge = document.getElementById('triad-mode-badge');
-    if (badge) { badge.textContent = r.active ? '진행 중' : (r.status === 'MILESTONE_COMPLETE' ? '완료' : '읽기 전용'); badge.className = 'badge ' + (r.active ? 'b-blue' : (r.status === 'MILESTONE_COMPLETE' ? 'b-green' : 'b-muted')); }
+    var complete = r.status === 'MILESTONE_COMPLETE' || r.status === 'SYNTHESIS_COMPLETE';
+    if (badge) {
+      badge.textContent = r.active ? '진행 중' : complete ? '완료'
+        : r.status === 'RESEARCH_STOPPED' ? '정지'
+        : r.status === 'HUMAN_REQUIRED' || r.status === 'INTERRUPTED' ? '확인 필요' : '대기';
+      badge.className = 'badge ' + (r.active ? 'b-blue' : complete ? 'b-green' : 'b-muted');
+    }
   }
   function setDashboardView(mode) {
     var triad = mode === 'TRIAD';
@@ -2207,6 +2357,37 @@ DASHBOARD_JS = r"""
   if (inspect) inspect.addEventListener('click', inspectRun);
   var normalModeBtn = document.getElementById('normal-mode-btn');
   var triadModeBtn = document.getElementById('triad-mode-btn');
+  var researchForm = document.getElementById('research-start-form');
+  researchProviderInputs.forEach(function (input) { input.addEventListener('change', updateResearchButton); });
+  updateResearchButton();
+  if (researchForm) researchForm.addEventListener('submit', async function (event) {
+    event.preventDefault();
+    var input = document.getElementById('research-topic');
+    var topic = input.value.trim();
+    var providers = selectedResearchDomains();
+    if (!topic || providers.length < 2 || researchSubmitting || researchWorkerBusy) return;
+    researchSubmitting = true;
+    updateResearchButton();
+    setText('research-submit-status', '연구 시작을 요청했습니다.');
+    try {
+      var response = await fetch(researchForm.action, {
+        method: 'POST', headers: {'Content-Type': 'application/json', 'X-Requested-With': 'fetch'},
+        body: JSON.stringify({topic: topic, providers: providers})
+      });
+      var result = await response.json();
+      setText('research-submit-status', result.message || '연구 시작 요청을 확인하지 못했습니다.');
+      if (response.ok && result.status === 'started') {
+        submittedResearchId = result.session_id;
+        researchWorkerBusy = true;
+      }
+    } catch (error) {
+      setText('research-submit-status', '연결이 끊겼습니다. 진행 상태를 확인한 뒤 다시 시도하세요.');
+    } finally {
+      researchSubmitting = false;
+      updateResearchButton();
+      pollStatus();
+    }
+  });
   if (normalModeBtn) normalModeBtn.addEventListener('click', function () { setDashboardView('NORMAL'); });
   if (triadModeBtn) triadModeBtn.addEventListener('click', function () { setDashboardView('TRIAD'); });
   var initialMode = 'NORMAL';
@@ -2296,8 +2477,16 @@ DASHBOARD_CSS = r"""
     /* main */
     #main { display: grid; grid-template-columns: 250px minmax(600px, 1fr) 300px; gap: 10px; padding: 8px 12px; min-height: 0; }
     #triad-research-center { display:none; grid-row:2 / 4; grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); gap:10px; padding:8px 12px; min-height:0; overflow:auto; }
-    .research-hero { grid-column:1 / 4; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px 18px; align-items:start; }
+    #triad-research-center .research-hero { grid-column:1 / -1; display:grid; gap:8px; align-items:start; }
     .research-hero h2 { color:var(--purple); margin-bottom:2px; }
+    #research-start-form { display:grid; gap:6px; }
+    #research-topic { box-sizing:border-box; width:100%; min-height:64px; resize:vertical; }
+    .research-providers { display:flex; gap:8px 18px; flex-wrap:wrap; margin:0; border:1px solid var(--border); border-radius:4px; }
+    .research-providers label { display:flex; align-items:center; gap:5px; }
+    #research-synthesizer { color:var(--muted); }
+    .research-submit { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .research-submit p { margin:0; color:var(--muted); }
+    #research-scope { margin:0; color:var(--muted); }
     .research-meta { display:flex; gap:12px; flex-wrap:wrap; color:var(--muted); font-size:11px; }
     .research-moonshot { font-size:15px; line-height:1.45; color:var(--text); margin-top:4px; white-space:pre-wrap; }
     .research-column { min-height:0; overflow:auto; }
@@ -2757,20 +2946,34 @@ def render_html():
 
     <section id="triad-research-center" aria-label="TRIAD Research Center">
         <div class="panel research-hero">
-            <div><h2>TRIAD RESEARCH CENTER <span id="triad-mode-badge" class="badge {'b-blue' if research.get('active') else 'b-muted'}">{'진행 중' if research.get('active') else '읽기 전용'}</span></h2>
+            <div><h2>TRIAD RESEARCH CENTER <span id="triad-mode-badge" class="badge {'b-blue' if research.get('active') else 'b-muted'}">{'진행 중' if research.get('active') else '대기'}</span></h2>
                 <div class="research-moonshot" id="research-moonshot">{html_lib.escape(str(research.get('moonshot') or 'TRIAD 연구 세션이 없습니다.'))}</div>
             </div>
+            <form id="research-start-form" method="post" action="/research/start">
+                <label for="research-topic">연구 주제</label>
+                <textarea id="research-topic" name="topic" rows="3" required maxlength="{RESEARCH_TOPIC_LIMIT}" aria-describedby="research-scope">{html_lib.escape(str(research.get('moonshot') or '')) if research.get('synthesis_only') and research.get('status') in ('HUMAN_REQUIRED', 'INTERRUPTED', 'RESEARCH_STOPPED') else ''}</textarea>
+                <p id="research-scope">선택한 AI에 주제를 전달해 독립 제안, 교차 비평, 가설 합성까지 진행합니다.</p>
+                <fieldset class="research-providers">
+                    <legend>참여 AI (2개 이상)</legend>
+                    <label><input type="checkbox" name="research-provider" value="OPENAI" {'checked' if 'OPENAI' not in research.get('excluded_domains', []) else ''}>Codex</label>
+                    <label><input type="checkbox" name="research-provider" value="ANTHROPIC" {'checked' if 'ANTHROPIC' not in research.get('excluded_domains', []) else ''}>Claude Code</label>
+                    <label><input type="checkbox" name="research-provider" value="GOOGLE" {'checked' if 'GOOGLE' not in research.get('excluded_domains', []) else ''}>Antigravity</label>
+                </fieldset>
+                <div class="research-submit"><button type="submit" id="research-start-btn" {'disabled' if research.get('worker_busy') else ''}>연구 시작</button>
+                    <p id="research-submit-status" role="status"></p></div>
+            </form>
             <div class="research-meta">
                 <span>세션 <b class="mono" id="research-session-id">{html_lib.escape(str(research.get('session_id') or '없음'))}</b></span>
                 <span>사이클 <b id="research-cycle">{int(research.get('cycle_number') or 0)} / {int(research.get('cycle_budget') or 0)}</b></span>
                 <span>단계 <b id="research-stage">{html_lib.escape(str(research.get('current_stage_ko') or '연구 없음'))}</b></span>
                 <span>상태 <b class="mono" id="research-status">{html_lib.escape(str(research.get('status') or 'NONE'))}</b></span>
+                <span id="research-readiness"></span>
             </div>
         </div>
         <div class="panel research-column">
-            <div class="research-card"><h3>3개 독립 제안</h3><ul id="research-proposals">{research_proposals_html}</ul></div>
+            <div class="research-card"><h3>독립 제안</h3><ul id="research-proposals">{research_proposals_html}</ul></div>
             <div class="research-card"><h3>교차 비평</h3><ul id="research-critiques">{research_critiques_html}</ul></div>
-            <div class="research-card"><h3>합성 가설</h3><p id="research-synthesis">{html_lib.escape(str(_rsyn.get('synthesized_hypothesis') or _rsyn.get('title') or '아직 합성된 가설이 없습니다.'))}</p></div>
+            <div class="research-card"><h3>합성 가설</h3><p id="research-synthesizer"></p><p id="research-synthesis">{html_lib.escape(str(_rsyn.get('synthesized_hypothesis') or _rsyn.get('title') or '아직 합성된 가설이 없습니다.'))}</p></div>
         </div>
         <div class="panel research-column">
             <div class="research-card"><h3>실험</h3><p id="research-experiment">{html_lib.escape(str(_rexp.get('goal') or _rexp.get('status') or '아직 계획된 실험이 없습니다.'))}</p></div>
@@ -3108,6 +3311,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(result, code)
             else:
                 self._redirect_home()
+        elif self.path == '/research/start':
+            if getattr(self.server, "stopping", False):
+                return self._send_json({"status": "error", "message": "Director를 종료하고 있습니다."}, 503)
+            if (self.headers.get('X-Requested-With', '').lower() != 'fetch'
+                    or self.headers.get_content_type() != 'application/json'):
+                return self._send_json({"status": "error", "message": "로컬 연구 시작 요청이 필요합니다."}, 403)
+            try:
+                size = int(self.headers.get('Content-Length', '0'))
+                if not 0 < size <= RESEARCH_TOPIC_LIMIT * 6 + 256:
+                    raise ValueError("invalid request size")
+                payload = json.loads(self.rfile.read(size))
+                if not isinstance(payload, dict):
+                    raise ValueError("JSON object required")
+            except (UnicodeError, ValueError):
+                return self._send_json({"status": "error", "message": "연구 주제 요청 형식이 올바르지 않습니다."}, 400)
+            if "providers" in payload:
+                selection = payload["providers"]
+            else:
+                mode = payload.get("mode", "three")
+                if mode not in ("three", "codex-claude"):
+                    return self._send_json({"status": "error", "message": "연구에 참여할 AI를 선택하세요."}, 400)
+                selection = ("OPENAI", "ANTHROPIC") if mode == "codex-claude" else ALL_TRIAD_DOMAINS
+            result = start_dashboard_research(payload.get("topic"), selection)
+            self._send_json(result, {"started": 202, "busy": 409}.get(result["status"], 400))
         elif self.path == '/project':
             params = self._read_form()
             path = params.get('path', [''])[0]

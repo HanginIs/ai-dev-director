@@ -4,6 +4,10 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
+import dashboard_server
+from core.db_path import get_db_path
 from core.process_runner import ProcessTreeRunner
 from core.research_orchestrator import ResearchOrchestrator
 from core.research_runner import TriadResearchRunner
@@ -93,6 +97,158 @@ def _ready(tmp_path, provider_state, calls=None):
     )
     session = orch.start_session(str(_project(tmp_path)), "Find a new falsifiable mechanism")
     return orch, session, calls
+
+
+@pytest.mark.parametrize(("providers", "google_status", "fail_domain"), [
+    (("OPENAI", "ANTHROPIC", "GOOGLE"), "HEALTHY", None),
+    (("OPENAI", "ANTHROPIC", "GOOGLE"), "HEALTHY", "GOOGLE"),
+    (("OPENAI", "ANTHROPIC", "GOOGLE"), "RECOVERING", None),
+    (("OPENAI", "ANTHROPIC"), "HEALTHY", None),
+    (("OPENAI", "ANTHROPIC"), "QUOTA_EXHAUSTED", None),
+    (("OPENAI", "GOOGLE"), "HEALTHY", None),
+    (("ANTHROPIC", "GOOGLE"), "HEALTHY", None),
+])
+def test_dashboard_start_runs_in_temporary_worktrees_and_stops_at_synthesis(
+    monkeypatch, provider_state, providers, google_status, fail_domain,
+):
+    provider_state(GOOGLE=google_status)
+    calls = DeterministicCalls(fail_domain=fail_domain)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def invoke(_runner, domain, prompt, cwd, stage):
+        entered.set()
+        assert release.wait(10)
+        assert (Path(cwd) / ".git").is_file()
+        return calls(domain, prompt, stage, cwd)
+
+    monkeypatch.setattr(TriadResearchRunner, "invoke", invoke)
+    monkeypatch.setattr(dashboard_server, "_RESEARCH_JOB", {"session_id": None, "busy": False, "error": ""})
+    assert dashboard_server.start_dashboard_research("   ")["status"] == "error"
+    try:
+        started = dashboard_server.start_dashboard_research("음원 파일명에서 버전명을 분리하는 규칙", providers)
+        assert started["status"] == "started"
+        sid = started["session_id"]
+        assert entered.wait(10)
+        live = dashboard_server.build_research_status_payload()
+        assert live["session_id"] == sid and live["active"] and live["worker_busy"]
+        assert live["current_stage"] == ResearchState.INDEPENDENT_RESEARCH
+        assert dashboard_server.start_dashboard_research("두 번째 연구")["status"] == "busy"
+    finally:
+        release.set()
+        for worker in threading.enumerate():
+            if worker.name.startswith("director-research-"):
+                worker.join(timeout=10)
+                assert not worker.is_alive()
+
+    final = dashboard_server.build_research_status_payload(sid)
+    assert not final["active"] and not final["worker_busy"] and final["experiment"] is None
+    assert (get_db_path().parent / "research" / sid).is_dir()
+    assert not Path(final["project_path"]).exists()
+    if fail_domain:
+        assert final["status"] == ResearchState.HUMAN_REQUIRED
+        assert "forced provider failure" in final["next_step"]
+        assert len(calls.calls) == 3
+    else:
+        assert final["status"] == final["current_stage"] == ResearchState.SYNTHESIS_COMPLETE
+        assert final["synthesis"]["synthesized_hypothesis"] == "combine causal checks"
+        participants = set(providers)
+        synthesizer = "OPENAI" if "OPENAI" in participants else "ANTHROPIC"
+        synthesis_call = next(call for call in calls.calls if call["stage"] == ResearchState.SYNTHESIS)
+        assert final["synthesis_domain"] == synthesis_call["domain"] == synthesizer
+        synthesis_prompt = json.loads(synthesis_call["prompt"])
+        assert synthesis_prompt["provider_domain"] == synthesizer
+        assert f"Do not prefer the {synthesizer} proposal" in synthesis_prompt["instructions"]
+        assert {row["domain"] for row in final["proposals"]} == participants
+        assert {row["domain"] for row in final["cross_critiques"]} == participants
+        assert {call["domain"] for call in calls.calls} == participants
+        assert len(calls.calls) == 2 * len(participants) + 1
+        if len(providers) == 2:
+            assert final["readiness"] == "TRIAD_DEGRADED"
+            assert set(final["excluded_domains"]) == {"OPENAI", "ANTHROPIC", "GOOGLE"} - participants
+            assert ResearchStateMachine().get_session(sid)["degraded_approved"] == 1
+            assert dashboard_server.ProviderManager().get_status("GOOGLE").value == google_status
+        if google_status == "RECOVERING":
+            assert dashboard_server.ProviderManager().get_status("GOOGLE").value == "HEALTHY"
+
+
+@pytest.mark.parametrize("providers", [None, [], ["OPENAI"], ["OPENAI", "OPENAI"], ["OPENAI", "OTHER"]])
+def test_dashboard_start_rejects_invalid_provider_selection(providers):
+    assert dashboard_server.start_dashboard_research("Compare two hypotheses", providers)["status"] == "error"
+
+
+def test_dashboard_stop_prevents_research_calls_in_later_stages(monkeypatch):
+    started_calls = []
+    both_entered = threading.Event()
+    release = threading.Event()
+    killed_owners = []
+    call_lock = threading.Lock()
+
+    def invoke(_runner, domain, prompt, cwd, stage):
+        with call_lock:
+            started_calls.append((domain, stage))
+            if len(started_calls) == 2:
+                both_entered.set()
+        assert release.wait(10)
+        return {"output": json.dumps(_proposal(domain))}
+
+    def kill_active(owner_id):
+        killed_owners.append(owner_id)
+        release.set()
+        return [123]
+
+    monkeypatch.setattr(TriadResearchRunner, "invoke", invoke)
+    monkeypatch.setattr(ProcessTreeRunner, "kill_active", kill_active)
+    monkeypatch.setattr(dashboard_server, "_RESEARCH_JOB", {"session_id": None, "busy": False, "error": ""})
+    started = dashboard_server.start_dashboard_research("Compare two hypotheses", ["ANTHROPIC", "GOOGLE"])
+    try:
+        assert started["status"] == "started"
+        assert both_entered.wait(10)
+        stopped = dashboard_server.stop_missions("test stop")
+        assert stopped["status"] == "stopped"
+        assert stopped["research_session_id"] == started["session_id"]
+        assert killed_owners == [started["session_id"]]
+    finally:
+        release.set()
+        for worker in threading.enumerate():
+            if worker.name == f"director-research-{started.get('session_id')}":
+                worker.join(timeout=10)
+                assert not worker.is_alive()
+
+    status = dashboard_server.build_research_status_payload(started["session_id"])
+    assert status["status"] == status["current_stage"] == ResearchState.RESEARCH_STOPPED
+    assert not status["worker_busy"]
+    assert set(started_calls) == {
+        ("ANTHROPIC", ResearchState.INDEPENDENT_RESEARCH), ("GOOGLE", ResearchState.INDEPENDENT_RESEARCH),
+    }
+    assert not status["proposals"] and not status["cross_critiques"] and status["synthesis"] is None
+
+
+def test_research_does_not_call_a_recovering_provider_without_a_claim(tmp_path, provider_state, monkeypatch):
+    calls = DeterministicCalls()
+    pm = provider_state(GOOGLE="RECOVERING")
+    assert pm.mark_trial_candidates() == ["GOOGLE"]
+    monkeypatch.setattr(pm, "claim_trial", lambda domain: False)
+    orch = ResearchOrchestrator(provider_manager=pm, artifact_root=tmp_path / "research", provider_call=calls)
+    session = orch.start_session(str(_project(tmp_path)), "Compare two hypotheses")
+
+    result = orch.run_independent_research(session["session_id"])
+
+    assert result["human_required"]
+    assert "RECOVERY_TRIAL_UNAVAILABLE: GOOGLE" in result["message"]
+    assert {call["domain"] for call in calls.calls} == {"OPENAI", "ANTHROPIC"}
+
+
+def test_two_provider_selection_blocks_if_claude_is_unavailable(tmp_path, provider_state):
+    calls = DeterministicCalls()
+    pm = provider_state(ANTHROPIC="UNAVAILABLE", GOOGLE="HEALTHY")
+    orch = ResearchOrchestrator(provider_manager=pm, artifact_root=tmp_path / "research", provider_call=calls)
+    result = orch.start_session(str(_project(tmp_path)), "Compare two hypotheses",
+                                allow_degraded=True, synthesis_only=True, excluded_domains=("GOOGLE",))
+
+    assert result["readiness"] == "TRIAD_BLOCKED" and result["human_required"]
+    assert result["missing_domains"] == ["ANTHROPIC", "GOOGLE"]
+    assert calls.calls == []
 
 
 def test_1_independent_research_is_concurrent_and_undisclosed(tmp_path, provider_state):

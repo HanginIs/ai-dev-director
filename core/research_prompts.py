@@ -214,26 +214,30 @@ def build_cross_critique_prompt(domain: str, user_challenge: str,
 
 
 def build_synthesis_prompt(user_challenge: str, proposals: Dict[str, Dict[str, Any]],
-                           critiques: Dict[str, Dict[str, Any]], degraded: bool = False) -> Dict[str, Any]:
+                           critiques: Dict[str, Dict[str, Any]], degraded: bool = False,
+                           provider_domain: str = "OPENAI") -> Dict[str, Any]:
     if len(proposals) < 2 or len(critiques) != len(proposals):
         raise ValueError("synthesis requires one critique for every completed proposal")
+    if provider_domain not in proposals:
+        raise ValueError("synthesizer must be a participating researcher")
     payload = {
         "stage": ResearchState.SYNTHESIS,
         "research_role": "HEAD_SYNTHESIZER",
-        "provider_domain": "OPENAI",
+        "provider_domain": provider_domain,
         "user_challenge": user_challenge,
         "degraded_research": bool(degraded),
         "proposals": proposals,
         "critiques": critiques,
         "output_contract": {
             "selection_type": "A", "title": "string", "synthesized_hypothesis": "string",
-            "rationale": "string", "source_domains": ["OPENAI"], "critique_lessons": ["string"],
+            "rationale": "string", "source_domains": [provider_domain], "critique_lessons": ["string"],
             "falsifiable_prediction": "string", "proposed_experiment": "string",
             "kill_criteria": ["string"], "risks": ["string"], "confidence": 0.5,
         },
         "instructions": (
-            "Synthesize the strongest falsifiable next hypothesis. Do not prefer the OPENAI proposal and do "
+            f"Synthesize the strongest falsifiable next hypothesis. Do not prefer the {provider_domain} proposal and do "
             "not use majority vote. You may select A/B/C, combine proposals, discard all, or derive a new D. "
+            "Only cite participating providers in source_domains. "
             "Return structured JSON with: selection_type, title, synthesized_hypothesis, rationale, "
             "source_domains, critique_lessons, falsifiable_prediction, proposed_experiment, kill_criteria, "
             "risks, confidence. The output_contract is strict: string means one JSON string, arrays contain "
@@ -244,7 +248,7 @@ def build_synthesis_prompt(user_challenge: str, proposals: Dict[str, Dict[str, A
     text = _stable_json(payload)
     return {
         "schema_version": "3.0-C", "stage": ResearchState.SYNTHESIS,
-        "provider_domain": "OPENAI", "prompt": payload, "prompt_text": text,
+        "provider_domain": provider_domain, "prompt": payload, "prompt_text": text,
         "prompt_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         "prompt_chars": len(text), "prompt_bytes": len(text.encode("utf-8")),
     }

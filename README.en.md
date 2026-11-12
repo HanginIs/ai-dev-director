@@ -7,7 +7,7 @@ A local development director that runs three logged-in AI coding CLIs (Claude Co
 This repository is a fork of [ai-dev-director by DAVZD](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8, changed to work on macOS. The original is Windows-first. This fork adds a native macOS app and hardens how results are applied, how missions are judged and how repositories are handled.
 
 - **Status:** used daily on macOS. All 721 tests pass on macOS (2026-11-13; one test that pretends to be Windows is skipped).
-- **Not verified:** the changes in this fork have not been run on Windows or Linux. TRIAD research mode is the original feature unchanged; beyond passing unit tests it has not been verified in this fork.
+- **Not verified:** the changes in this fork have not been run on Windows or Linux. The complete TRIAD flow using all three live CLIs is also unverified.
 
 The console and all mission messages are in Korean.
 
@@ -22,6 +22,7 @@ goal ─▶ HEAD (writes an ORDER) ─▶ BUILDER (proposes file changes as JSON
 
 - **Roles:** by default HEAD is Claude Code, BUILDER is Antigravity and REVIEWER is Codex. When one CLI hits its quota or fails, another takes over. Two CLIs are enough.
 - **Missions:** one chat line becomes a mission. HEAD plans one milestone at a time and plans the next one from the test and review results of the last.
+- **TRIAD research:** In Workshop → TRIAD Research, enter a topic, select at least two AIs, and choose **Start research**. The selected CLIs propose and critique independently. Codex synthesizes the hypothesis when selected, otherwise Claude Code does. The session runs in a temporary workspace and ends after synthesis. **Stop work** cancels it.
 - **Isolation:** every change is made in a git worktree under `.director_worktrees/` inside the project. The project itself changes only in the apply step after the mission ends.
 - **Apply:** a result that passed is applied to the project automatically, depending on settings. The tests are run again in the project after applying, and the change is rolled back if they fail. Nothing is committed.
 

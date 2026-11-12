@@ -130,6 +130,27 @@ def test_guard_belongs_to_one_thread_only():
     check_stop()
 
 
+def test_scoped_stop_terminates_owned_child_when_process_table_is_unavailable(monkeypatch):
+    from unittest.mock import Mock
+
+    research_child = Mock()
+    research_child.poll.return_value = None
+    other_child = Mock()
+    monkeypatch.setattr(process_runner, "_ACTIVE", {101: "claude", 102: "codex"})
+    monkeypatch.setattr(process_runner, "_OWNER", {101: "TRIAD-test", 102: "MSN-test"})
+    monkeypatch.setattr(process_runner, "_HANDLES", {101: research_child, 102: other_child})
+
+    def process_table_denied(pid):
+        assert pid == 101
+        raise PermissionError("process table access denied")
+
+    monkeypatch.setattr(ProcessTreeRunner, "kill_process_tree", process_table_denied)
+    assert ProcessTreeRunner.kill_active("TRIAD-test") == [101]
+    research_child.kill.assert_called_once_with()
+    other_child.kill.assert_not_called()
+    assert process_runner.active_processes() == {102: "codex"}
+
+
 def test_mission_thread_leaves_no_guard_behind(tmp_path, monkeypatch):
     stopped_mission(tmp_path, monkeypatch, "build")
     assert getattr(process_runner._STOP, "guard", None) is None
