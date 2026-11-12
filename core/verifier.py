@@ -161,28 +161,43 @@ class Verifier:
 
     @staticmethod
     def _parse_test_counts(output: str) -> Dict[str, int]:
+        """Counts from the runners' own summary lines, added up when one command runs several suites.
+
+        Only summary lines are read. A test's log output may say anything: "requested resend of p1:r1 failed" was
+        once counted as one failed test, and of "Ran 35 tests" followed by "Ran 175 tests" only the first was."""
         import re
         counts = {"passed": 0, "failed": 0, "total": 0}
         if not output:
             return counts
 
-        # Pytest pattern: '12 passed, 1 failed' or '4 passed in 0.02s'
-        pass_match = re.search(r"(\d+)\s+passed", output)
-        if pass_match:
-            counts["passed"] = int(pass_match.group(1))
+        # unittest: 'Ran 4 tests in 0.001s', then 'OK' or 'FAILED (failures=1, errors=2)'
+        ran = [int(n) for n in re.findall(r"(?m)^Ran\s+(\d+)\s+tests?\s+in\b", output)]
+        if ran:
+            broken = sum(int(n) for line in re.findall(r"(?m)^FAILED\s+\(([^)]*)\)", output)
+                         for n in re.findall(r"(?:failures|errors)=(\d+)", line))
+            total = sum(ran)
+            counts["total"] += total
+            counts["failed"] += min(broken, total)
+            counts["passed"] += max(total - broken, 0)
 
-        fail_match = re.search(r"(\d+)\s+failed", output)
-        if fail_match:
-            counts["failed"] = int(fail_match.group(1))
-
-        # Unittest pattern: 'Ran 4 tests in 0.001s'
-        ran_match = re.search(r"Ran\s+(\d+)\s+tests", output)
-        if ran_match:
-            counts["total"] = int(ran_match.group(1))
-            if "OK" in output:
-                counts["passed"] = counts["total"]
+        # pytest: '12 passed, 1 failed in 0.3s', '==== 4 passed, 1 skipped in 0.02s ====', '1 error in 0.1s'
+        for line in re.findall(r"(?m)^=*\s*((?:\d+\s+[a-z]+(?:,\s+)?)+)\s+in\s+[\d.]+\s*s\b", output):
+            found = {word: int(n) for n, word in re.findall(r"(\d+)\s+([a-z]+)", line)}
+            if not {"passed", "failed", "error", "errors"} & set(found):
+                continue
+            passed = found.get("passed", 0)
+            failed = found.get("failed", 0) + found.get("error", 0) + found.get("errors", 0)
+            counts["passed"] += passed
+            counts["failed"] += failed
+            counts["total"] += passed + failed
 
         if counts["total"] == 0:
+            # Another runner ('5 passed', 'Tests: 1 failed, 5 passed'): a count that stands on its own, never the
+            # tail of a longer token such as 'r1 failed' or '10:31 failed'.
+            for key in ("passed", "failed"):
+                match = re.search(r"(?<![\w:.\-/])(\d+)\s+" + key + r"\b", output)
+                if match:
+                    counts[key] = int(match.group(1))
             counts["total"] = counts["passed"] + counts["failed"]
 
         if counts["total"] == 0:

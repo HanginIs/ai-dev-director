@@ -144,6 +144,35 @@ def test_swift_test_output_counts():
     assert Verifier._parse_test_counts("PASS: render") == {"passed": 0, "failed": 0, "total": 0}
 
 
+def test_counts_come_from_summary_lines_and_add_up_over_suites():
+    """2026-11-12: two unittest suites in one command were recorded as 35 passed / 1 failed / 35 total; the
+    'failure' was a log line of a passing test and the second suite was not counted at all."""
+    two_suites = ("2026-11-12 11:56:47,102 ERROR requested resend of p1:r1 failed (attempt 1): telegram down\n"
+                  "----------------------------------------------------------------------\n"
+                  "Ran 35 tests in 0.446s\n\nOK\n"
+                  "selected SNS delivery needs a check: remote failed\n"
+                  "Ran 175 tests in 5.851s\n\nOK\n")
+    assert Verifier._parse_test_counts(two_suites) == {"passed": 210, "failed": 0, "total": 210}
+    broken = "Ran 10 tests in 0.1s\n\nFAILED (failures=2, errors=1)\nRan 5 tests in 0.1s\n\nOK (skipped=1)\n"
+    assert Verifier._parse_test_counts(broken) == {"passed": 12, "failed": 3, "total": 15}
+    assert Verifier._parse_test_counts("Ran 1 test in 0.001s\n\nOK\n") == {"passed": 1, "failed": 0, "total": 1}
+
+
+def test_pytest_counts_ignore_log_lines_and_add_up():
+    log = ("INFO upload of clip 3 failed, retrying\n12 passed in 0.50s\n"
+           "=========== 2 failed, 5 passed, 1 skipped in 1.20s ===========\n")
+    assert Verifier._parse_test_counts(log) == {"passed": 17, "failed": 2, "total": 19}
+    assert Verifier._parse_test_counts("=== 1 error in 0.10s ===") == {"passed": 0, "failed": 1, "total": 1}
+    assert Verifier._parse_test_counts("3 warnings in 0.10s") == {"passed": 0, "failed": 0, "total": 0}
+    assert Verifier._parse_test_counts("=== 691 passed, 1 skipped, 2 deselected in 241.01s (0:04:01) ===") == {
+        "passed": 691, "failed": 0, "total": 691}
+
+
+def test_other_runners_are_still_read_but_not_from_inside_a_longer_token():
+    assert Verifier._parse_test_counts("Tests: 1 failed, 5 passed, 6 total") == {"passed": 5, "failed": 1, "total": 6}
+    assert Verifier._parse_test_counts("job p1:r1 failed\nbuild-7 passed") == {"passed": 0, "failed": 0, "total": 0}
+
+
 def test_verification_timeout_setting():
     assert verification_timeout({}) == 120.0
     assert verification_timeout({"verification": {"timeout": 300}}) == 300.0
