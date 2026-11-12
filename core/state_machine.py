@@ -195,6 +195,9 @@ class StateMachine:
         return new_state in allowed
 
     def transition_to(self, run_id: str, new_state: str, details: Optional[str] = None) -> None:
+        if new_state not in (State.FAIL, State.HUMAN_REQUIRED, State.TIMEOUT):
+            from core.process_runner import check_stop
+            check_stop()   # a stopped run may still end, but it may not advance or PASS
         run = self.get_run(run_id)
         if not run:
             raise ValueError(f"Run {run_id} does not exist.")

@@ -22,6 +22,29 @@ def _current_mission() -> Optional[str]:
         return None
 
 
+class OperationStopped(Exception):
+    """The operator stopped this work: nothing further may be started or advanced on this thread."""
+
+
+_STOP = threading.local()
+
+
+def set_stop_guard(guard: Optional[Callable[[], Optional[str]]]) -> None:
+    """A guard returns a reason once the work running on this thread has been stopped, otherwise None. A mission
+    installs one for its thread; while it reports a stop, no CLI is started and no run advances (check_stop)."""
+    _STOP.guard = guard
+
+
+def check_stop() -> None:
+    """Raise OperationStopped when the work on this thread was stopped. Killing the CLI that happened to be running
+    is not enough: the caller sees an ordinary failure and would retry, fail over, review and even apply.
+    (Approach from digilogd-cmd/ai-dev-director PR #1 by edge0303.)"""
+    guard = getattr(_STOP, "guard", None)
+    reason = guard() if guard else None
+    if reason:
+        raise OperationStopped(f"OPERATION_STOPPED: {reason}")
+
+
 def active_processes() -> Dict[int, str]:
     with _ACTIVE_LOCK:
         return dict(_ACTIVE)
@@ -148,6 +171,7 @@ class ProcessTreeRunner:
     ) -> ProcessResult:
         """Every AI CLI call is written to the work ledger (core.usage) around the real execution; ledger problems
         never affect the call itself."""
+        check_stop()   # covers every retry and failover path after a stop killed the CLI that was running
         row_id = None
         try:
             from core import usage

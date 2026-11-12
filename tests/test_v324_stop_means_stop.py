@@ -1,0 +1,135 @@
+"""
+v3.2.4 (HanginIs fork): a stopped mission starts nothing further, is not completed and is not applied.
+
+Reproduced on this fork on 2026-11-13 before the fix: the operator stopped a mission while its Builder ran; the
+Builder was retried, the Reviewer and HEAD ran, the run reached PASS, the mission was reported "미션 완료" and its
+three files were applied to the project. The defect and the approach to the fix come from
+digilogd-cmd/ai-dev-director PR #1 (edge0303), found there with real CLI runs.
+"""
+import threading
+
+import pytest
+
+from core import process_runner
+from core.mission import MissionRunner, MissionStore, stop_request
+from core.process_runner import OperationStopped, ProcessTreeRunner, check_stop, set_stop_guard
+from core.state_machine import State, StateMachine
+from schemas.decision import DecisionSchema
+from schemas.order import OrderSchema
+from schemas.review_result import ReviewResultSchema
+from tests.test_v306_head_proxy_autonomy import ORDER, good_build, proxy_orch, quiet
+
+pytestmark = pytest.mark.head_proxy
+
+
+@pytest.fixture(autouse=True)
+def no_guard_left_behind():
+    yield
+    set_stop_guard(None)
+
+
+def stopped_mission(tmp_path, monkeypatch, stop_during):
+    """Run a one-step mission whose operator presses stop during `stop_during` ('build' or 'review')."""
+    store = MissionStore(tmp_path / "missions")
+    log, ident, swaps, blamed = [], {}, [], []
+
+    def stop_now():
+        stop_request(ident["id"], reason="test", store=store)
+
+    def factory():
+        orch = proxy_orch()
+        quiet(monkeypatch, orch)
+        good = good_build([])
+
+        def build(order, worktree_path, builder_fn=None):
+            log.append("build")
+            if stop_during == "build":
+                stop_now()
+                raise RuntimeError("builder process killed")
+            return good(order, worktree_path)
+        monkeypatch.setattr(orch.builder, "run", build)
+        monkeypatch.setattr(orch, "_swap_agent", lambda *a: swaps.append(a[0]) or False)
+        monkeypatch.setattr(orch.pm, "parse_cli_error", lambda *a: blamed.append(a))
+
+        def review(rid, o, v, *a):
+            log.append("review")
+            if stop_during == "review":
+                stop_now()
+            r = ReviewResultSchema(verdict="pass", summary="review")
+            orch._save_json(rid, "review.json", r)
+            return r, None
+        monkeypatch.setattr(orch, "run_reviewer_with_failover", review)
+        monkeypatch.setattr(orch, "run_decision_with_failover", lambda rid, o, b, v, r, *a: (
+            log.append("decide") or DecisionSchema(decision="PASS", rationale="evidence", next_steps=[]), None))
+        monkeypatch.setattr(orch.head, "plan_next",
+                            lambda *a, **k: log.append("plan") or {"status": "DONE", "summary": "done"}, raising=False)
+        return orch
+
+    said = []
+    runner = MissionRunner(factory, store, lambda text, run_id=None, role="SYSTEM": said.append(text))
+    project = tmp_path / "proj"
+    mission = runner.create(str(project), "double", OrderSchema(**ORDER), config=factory().config, auto_apply="on_pass")
+    ident["id"] = mission["mission_id"]
+    final = runner.run(mission["mission_id"])
+    return final, log, said, project, swaps, blamed
+
+
+def test_stop_during_the_builder_starts_nothing_further_and_applies_nothing(tmp_path, monkeypatch):
+    final, log, said, project, swaps, blamed = stopped_mission(tmp_path, monkeypatch, "build")
+    assert log == ["build"]                                       # no retry, no review, no decision, no planning
+    assert final["status"] == "STOPPED" and final.get("applied") is None
+    assert not (project / "feature.py").exists()                  # nothing reached the project
+    assert not any("미션 완료" in text for text in said)
+    state = StateMachine().get_run(final["steps"][0]["run_id"])["current_state"]
+    assert state == State.FAIL
+    assert swaps == [] and blamed == []                           # the killed Builder is not a provider failure
+
+
+def test_stop_during_the_review_does_not_let_the_run_pass(tmp_path, monkeypatch):
+    final, log, said, project, swaps, blamed = stopped_mission(tmp_path, monkeypatch, "review")
+    assert "plan" not in log
+    assert final["status"] == "STOPPED" and final.get("applied") is None
+    assert not (project / "feature.py").exists()
+    assert StateMachine().get_run(final["steps"][0]["run_id"])["current_state"] != State.PASS
+
+
+def test_stopped_status_survives_a_save_of_a_finished_copy(tmp_path):
+    store = MissionStore(tmp_path / "missions")
+    mission = {"mission_id": "MSN-STOPSAVE", "status": "RUNNING", "steps": []}
+    store.save(mission)
+    stop_request("MSN-STOPSAVE", store=store)
+    for status in ("RUNNING", "DONE", "INCOMPLETE", "FAILED"):
+        store.save(dict(mission, status=status))
+        assert store.load("MSN-STOPSAVE")["status"] == "STOPPED"
+    store.save(dict(mission, status="RUNNING"), force=True)       # reopen() is the only way back
+    assert store.load("MSN-STOPSAVE")["status"] == "RUNNING"
+
+
+def test_no_cli_is_started_and_no_run_advances_once_the_guard_reports_a_stop(tmp_path):
+    sm = StateMachine()
+    sm.create_run("RUN-TEST-STOPGUARD", str(tmp_path), "g")
+    set_stop_guard(lambda: "operator")
+    with pytest.raises(OperationStopped):
+        ProcessTreeRunner.run(argv=["definitely-not-a-cli"], cwd=str(tmp_path))
+    with pytest.raises(OperationStopped):
+        sm.transition_to("RUN-TEST-STOPGUARD", State.PLANNING)
+    sm.transition_to("RUN-TEST-STOPGUARD", State.FAIL, details="stopped")      # ending is still allowed
+    assert sm.get_run("RUN-TEST-STOPGUARD")["current_state"] == State.FAIL
+
+
+def test_guard_belongs_to_one_thread_only():
+    set_stop_guard(lambda: "operator")
+    seen = []
+    worker = threading.Thread(target=lambda: seen.append(check_stop()))
+    worker.start()
+    worker.join()
+    assert seen == [None]                                          # another mission's thread is not stopped
+    with pytest.raises(OperationStopped):
+        check_stop()
+    set_stop_guard(None)
+    check_stop()
+
+
+def test_mission_thread_leaves_no_guard_behind(tmp_path, monkeypatch):
+    stopped_mission(tmp_path, monkeypatch, "build")
+    assert getattr(process_runner._STOP, "guard", None) is None

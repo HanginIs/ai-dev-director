@@ -39,9 +39,10 @@ class MissionStore:
         return self.base / f"{mission_id}.json"
 
     def save(self, mission: Dict[str, Any], force: bool = False) -> None:
-        """A stop request written by the operator (status STOPPED on disk) survives saves from the running mission
-        thread, which still holds a RUNNING copy in memory. Only reopen() (force=True) may clear it."""
-        if not force and mission.get("status") == "RUNNING":
+        """A stop request written by the operator (status STOPPED on disk) survives every save from the mission
+        thread, whatever status its in-memory copy holds (it used to survive only a RUNNING copy, so a mission that
+        finished its step after the stop overwrote it with DONE). Only reopen() (force=True) may clear it."""
+        if not force and mission.get("status") != "STOPPED":
             current = self.load(mission["mission_id"])
             if current and current.get("status") == "STOPPED":
                 mission["status"] = "STOPPED"
@@ -224,6 +225,8 @@ class MissionRunner:
         self.store.save(mission)
         from core import usage
         usage.set_context(mission_id=mission_id)
+        from core.process_runner import set_stop_guard
+        set_stop_guard(lambda: self._stop_reason(mission_id))
         try:
             while mission["status"] == "RUNNING":
                 mission = self._advance(mission)
@@ -232,6 +235,7 @@ class MissionRunner:
                     mission = fresh
                     break
         finally:
+            set_stop_guard(None)
             latest = self.store.load(mission_id) or mission
             # Only close the run after its worker has returned: releasing BUSY
             # while the worker is still writing would allow overlapping runs.
@@ -240,6 +244,13 @@ class MissionRunner:
             latest["owner_pid"] = None
             self.store.save(latest)
         return self.store.load(mission_id)
+
+    def _stop_reason(self, mission_id: str) -> Optional[str]:
+        """Why this mission was stopped by the operator, or None while it is not."""
+        current = self.store.load(mission_id)
+        if current and current.get("status") == "STOPPED":
+            return current.get("blocked_reason") or "stopped"
+        return None
 
     def reopen(self, mission_id: str) -> Optional[Dict[str, Any]]:
         """A BLOCKED/INCOMPLETE mission continues (e.g. after the user approved the blocking run)."""
@@ -275,6 +286,8 @@ class MissionRunner:
                 mission["no_verification_notified"] = True
                 self.store.save(mission)
                 self.notify(f"[미션 {step['index']}/{total}] {NO_VERIFICATION_HINT}", run_id=step["run_id"])
+        if self._stop_reason(mission["mission_id"]):
+            return self.store.load(mission["mission_id"])      # stopped: no planning, no next step
         result = step["result"]
         if result["final_state"] == State.PASS:
             mission["base_worktree"] = result.get("worktree_path") or mission.get("base_worktree")
@@ -392,7 +405,9 @@ class MissionRunner:
         except Exception as exc:
             row = orch.sm.get_run(rid) or {}
             if row.get("current_state") not in TERMINAL_STATES:
-                orch.sm.transition_to(rid, State.FAIL, details=f"MISSION_STEP_EXCEPTION: {str(exc)[:500]}")
+                from core.process_runner import OperationStopped
+                label = "" if isinstance(exc, OperationStopped) else "MISSION_STEP_EXCEPTION: "
+                orch.sm.transition_to(rid, State.FAIL, details=f"{label}{str(exc)[:500]}")
 
     @staticmethod
     def _record_escalation(orch, mission, order: OrderSchema, reason: str) -> str:
@@ -486,6 +501,8 @@ class MissionRunner:
         return ", ".join(parts)
 
     def _finish(self, mission: Dict[str, Any], status: str, summary: str = "", blocked: Optional[str] = None):
+        if self._stop_reason(mission["mission_id"]):           # a stopped mission is neither completed nor applied
+            return self.store.load(mission["mission_id"])
         passed = sum(1 for s in mission["steps"] if (s.get("result") or {}).get("final_state") == State.PASS)
         if status == "DONE" and passed == 0:
             # HEAD may judge the goal met, but nothing passed review and verification: nothing is delivered.

@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
 
+from core.process_runner import check_stop
 from core.state_machine import StateMachine, State, TERMINAL_STATES
 from core.git_manager import GitManager
 from core.safety import SafetyPolicy, ScopeViolationError
@@ -572,6 +573,7 @@ class Orchestrator:
         round_start = len(history)
         builder_result = None
         for attempt in range(1, attempts + 1):
+            check_stop()
             attempt_order = order
             if len(history) > round_start:
                 attempt_order = order.model_copy(deep=True)
@@ -584,6 +586,7 @@ class Orchestrator:
                 try:
                     builder_result = self.builder.run(attempt_order, worktree_path, builder_fn=None)
                 except Exception as e:
+                    check_stop()   # the operator killed this CLI: its failure says nothing about the provider
                     builder_result = BuilderResultSchema(status="FAILED", files_modified=[], commands_run=[],
                                                          summary="Builder raised an exception", error=f"BUILDER_EXCEPTION: {str(e)[:300]}")
                 cli_evidence = getattr(self.builder, 'last_execution_info', None)
@@ -991,6 +994,7 @@ class Orchestrator:
         git_diff = verification.get("git_diff", "") if verification else ""
         tried, last_err = set(), None
         for attempt in range(4):
+            check_stop()
             domain = self._get_agent_domain(self.reviewer)
             tried.add(domain)
             err = None
@@ -1038,6 +1042,7 @@ class Orchestrator:
         rule decides from hard evidence only (tests + independent review), and says so in the rationale."""
         tried, last_err = set(), None
         for attempt in range(4):
+            check_stop()
             domain = self._get_agent_domain(self.head)
             tried.add(domain)
             if self._provider_ready(self.head, run_id, "DECIDING", logger):
