@@ -1338,6 +1338,8 @@ def build_status_payload() -> dict:
     return payload
 
 
+_RESEARCH_PROVIDER_LABELS = {"OPENAI": "Codex", "ANTHROPIC": "Claude Code", "GOOGLE": "Antigravity"}
+
 _RESEARCH_STAGE_KO = {
     "RESEARCH_INTAKE": "연구 준비",
     "INDEPENDENT_RESEARCH": "독립 제안",
@@ -2158,7 +2160,7 @@ DASHBOARD_JS = r"""
     setText('research-cycle', (r.cycle_number || 0) + ' / ' + (r.cycle_budget || 0));
     setText('research-stage', r.current_stage_ko || r.current_stage || '연구 없음');
     setText('research-status', r.status || 'NONE');
-    var providerNames = {OPENAI: 'Codex', ANTHROPIC: 'Claude Code', GOOGLE: 'Antigravity'};
+    var providerNames = I18N.research_provider || {};
     var excluded = r.excluded_domains || [];
     var missing = (r.missing_domains || []).filter(function (name) { return !excluded.includes(name); })
       .map(function (name) { return providerNames[name] || name; });
@@ -2178,10 +2180,10 @@ DASHBOARD_JS = r"""
       }
     }
     replaceList('research-proposals', r.proposals, function (p) {
-      return (p.domain || 'AI') + ' · ' + (p.hypothesis || '가설 없음') + (p.confidence === null || p.confidence === undefined ? '' : ' · 신뢰도 ' + p.confidence);
+      return (providerNames[p.domain] || p.domain || 'AI') + ' · ' + (p.hypothesis || '가설 없음') + (p.confidence === null || p.confidence === undefined ? '' : ' · 신뢰도 ' + p.confidence);
     });
     replaceList('research-critiques', r.cross_critiques, function (c) {
-      return (c.domain || 'AI') + ' · ' + (c.weakest_assumption || c.logical_flaw || c.self_critique || '비평 기록');
+      return (providerNames[c.domain] || c.domain || 'AI') + ' · ' + (c.weakest_assumption || c.logical_flaw || c.self_critique || '비평 기록');
     });
     var syn = r.synthesis || {};
     setText('research-synthesis', syn.synthesized_hypothesis || syn.title || '아직 합성된 가설이 없습니다.');
@@ -2857,13 +2859,17 @@ def render_html():
         core_stage = ("ORCHESTRATING \u00b7 " + (act.get("stage") or "")) if act.get("director") else "IDLE"
 
         research = st.get("research") or {}
+        def research_provider_label(domain):
+            name = str(domain or "AI")
+            return html_lib.escape(_RESEARCH_PROVIDER_LABELS.get(name, name))
+
         research_proposals_html = "".join(
-            f"<li>{html_lib.escape(str(p.get('domain') or 'AI'))} · "
+            f"<li>{research_provider_label(p.get('domain'))} · "
             f"{html_lib.escape(str(p.get('hypothesis') or '가설 없음'))}</li>"
             for p in (research.get("proposals") or [])
         ) or "<li class='research-empty'>아직 기록된 내용이 없습니다.</li>"
         research_critiques_html = "".join(
-            f"<li>{html_lib.escape(str(c.get('domain') or 'AI'))} · "
+            f"<li>{research_provider_label(c.get('domain'))} · "
             f"{html_lib.escape(str(c.get('weakest_assumption') or c.get('logical_flaw') or c.get('self_critique') or '비평 기록'))}</li>"
             for c in (research.get("cross_critiques") or [])
         ) or "<li class='research-empty'>아직 기록된 내용이 없습니다.</li>"
@@ -2871,6 +2877,7 @@ def render_html():
             f"<li>{html_lib.escape(str(x))}</li>" for x in (research.get("rejected_ideas") or [])
         ) or "<li class='research-empty'>아직 기록된 내용이 없습니다.</li>"
         _rsyn = research.get("synthesis") or {}
+        synthesizer = research.get("synthesis_domain")
         _rexp = research.get("experiment") or {}
         _rev = research.get("evidence") or {}
         _research_evidence_parts = []
@@ -2973,7 +2980,7 @@ def render_html():
         <div class="panel research-column">
             <div class="research-card"><h3>독립 제안</h3><ul id="research-proposals">{research_proposals_html}</ul></div>
             <div class="research-card"><h3>교차 비평</h3><ul id="research-critiques">{research_critiques_html}</ul></div>
-            <div class="research-card"><h3>합성 가설</h3><p id="research-synthesizer"></p><p id="research-synthesis">{html_lib.escape(str(_rsyn.get('synthesized_hypothesis') or _rsyn.get('title') or '아직 합성된 가설이 없습니다.'))}</p></div>
+            <div class="research-card"><h3>합성 가설</h3><p id="research-synthesizer">{'합성 · ' + research_provider_label(synthesizer) if synthesizer else ''}</p><p id="research-synthesis">{html_lib.escape(str(_rsyn.get('synthesized_hypothesis') or _rsyn.get('title') or '아직 합성된 가설이 없습니다.'))}</p></div>
         </div>
         <div class="panel research-column">
             <div class="research-card"><h3>실험</h3><p id="research-experiment">{html_lib.escape(str(_rexp.get('goal') or _rexp.get('status') or '아직 계획된 실험이 없습니다.'))}</p></div>
@@ -3156,7 +3163,7 @@ def render_html():
             <button id="alert-reject-btn" type="button" class="reject" style="{ap_btn_style}">{I18N.t("reject")}</button>
         </div>
     </div>
-    <script>window.__I18N = {json.dumps(I18N.i18n_bundle(), ensure_ascii=False)};</script>
+    <script>window.__I18N = {json.dumps({**I18N.i18n_bundle(), "research_provider": _RESEARCH_PROVIDER_LABELS}, ensure_ascii=False)};</script>
     <script>{DASHBOARD_JS}</script>
 </body>
 </html>"""

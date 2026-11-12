@@ -142,6 +142,10 @@ def test_g5_html_separates_normal_and_triad_with_explicit_research_start():
     assert "setDashboardView" in html and "renderResearch" in html
     assert 'action="/research/start"' in html
     assert 'id="research-topic"' in html
+    assert "<li>Claude Code · 결정론적" in html
+    assert "<li>Antigravity · 결정론적" in html
+    assert "<li>Codex · 입력 다양성이 부족하다</li>" in html
+    assert 'id="research-synthesizer">합성 · Codex</p>' in html
     for provider in ("OPENAI", "ANTHROPIC", "GOOGLE"):
         assert f'type="checkbox" name="research-provider" value="{provider}" checked' in html
     assert "innerHTML" not in html
