@@ -38,11 +38,58 @@ def identity():
                GIT_COMMITTER_NAME='AI DEV Bootstrap', GIT_COMMITTER_EMAIL='bootstrap@localhost')
     return env
 
+# Folders of the user's home that hold personal files, not a project. Only the folder itself is refused:
+# ~/Documents/my-app is a normal place for a project.
+PERSONAL_FOLDERS = ('Downloads', 'Desktop', 'Documents', 'Pictures', 'Movies', 'Music', 'Public', 'Videos')
+# Places where apps and their data are installed. Everything below them is refused as well.
+INSTALL_FOLDERS = ('Applications', 'Library', 'AppData')
+
+
+def _same_or_inside(path, folder):
+    a, b = str(path).casefold(), str(folder).casefold()     # macOS and Windows file names ignore case
+    return a == b or a.startswith(b.rstrip('/\\') + os.sep)
+
+
+def not_a_project_folder(root):
+    """Why the Director must not create a git repository in this folder, or None when it may.
+
+    Asked only for a folder that is not a repository yet. Two missions pointed at ~/Downloads and at
+    ~/Applications/Chrome Apps.localized ("check this app") turned those folders into repositories and copied
+    their files into .director_worktrees. A folder the user already made a repository is their own decision."""
+    root = Path(root)
+    home = Path.home().resolve()
+    for name in PERSONAL_FOLDERS:
+        if str(root).casefold() == str(home / name).casefold():
+            return f'개인 파일 폴더({root})입니다'
+    places = [home / name for name in INSTALL_FOLDERS]
+    places += [Path(x) for x in ('/Applications', '/Library', '/System', '/usr', '/bin', '/sbin', '/etc', '/opt/homebrew')]
+    places += [Path(os.environ[k]) for k in ('ProgramFiles', 'ProgramFiles(x86)', 'ProgramData', 'SystemRoot') if os.environ.get(k)]
+    for place in places:
+        try: real = place.resolve()                          # /etc is /private/etc on macOS, and root is resolved
+        except OSError: real = place
+        if _same_or_inside(root, place) or _same_or_inside(root, real):
+            return f'앱이나 시스템 파일이 설치되는 곳({place}) 안입니다'
+    if any(part.lower().endswith('.app') for part in root.parts):
+        return '앱 번들(.app) 안입니다'
+    try:
+        apps = sorted(x.name for x in root.iterdir() if x.name.lower().endswith('.app') and x.is_dir())
+    except OSError:
+        apps = []
+    if apps:
+        return f'설치된 앱({apps[0]})이 들어 있는 폴더입니다'
+    return None
+
+
 def prepare_project(path):
     if not str(path).strip(): raise ValueError('프로젝트 경로가 필요합니다')
     root = Path(path).resolve()
     if root == Path(root.anchor) or root == Path.home() or root == SOURCE_ROOT or SOURCE_ROOT in root.parents or root in SOURCE_ROOT.parents:
         raise ValueError('프로젝트 루트로 사용할 수 없는 광범위/제어 경로입니다')
+    if not (root / '.git').exists():
+        reason = not_a_project_folder(root)
+        if reason:
+            raise ValueError(f'프로젝트 폴더로 쓸 수 없습니다: {reason}. git 저장소와 작업본을 만들지 않았습니다. '
+                             '고칠 파일을 전용 폴더(예: ~/Work/src/<이름>)로 옮긴 뒤 그 폴더를 프로젝트로 지정하세요')
     root.mkdir(parents=True, exist_ok=True)
     if not (root / '.git').exists():
         # A folder inside another repository (a monorepo subfolder, or any folder under a parent that is a repo)

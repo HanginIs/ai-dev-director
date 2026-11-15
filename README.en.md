@@ -6,7 +6,7 @@ A local development director that runs three logged-in AI coding CLIs (Claude Co
 
 This repository is a fork of [ai-dev-director by DAVZD](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8, changed to work on macOS. The original is Windows-first. This fork adds a native macOS app and hardens how results are applied, how missions are judged and how repositories are handled.
 
-- **Status:** used daily on macOS. All 721 tests pass on macOS (2026-11-13; one test that pretends to be Windows is skipped).
+- **Status:** used daily on macOS. All 751 tests pass on macOS (2026-11-15; one test that pretends to be Windows is skipped).
 - **Not verified:** the changes in this fork have not been run on Windows or Linux. The complete TRIAD flow using all three live CLIs is also unverified.
 
 The console and all mission messages are in Korean.
@@ -102,6 +102,7 @@ When there is a result that passed, the line before it reads **"미션 전체 �
 | Money and credentials need a person | The mission stops at payments, live-account order code, account creation and irreversible external actions. |
 | Stop means stop | "중단", "멈춰" or "stop" in chat, or the stop button in the console, ends the CLIs that mission started at once. A stopped mission starts no further CLI call, is not marked done and its result is not applied. Other missions keep running. |
 | No repository inside a repository | If the chosen project folder is already inside another git repository, no new repository is created; you are told to choose the repository root. |
+| Folders that are not projects are refused | The Downloads, Desktop and Documents folders themselves, the Applications and Library folders and everything below them, and any folder holding an app bundle (.app) are not accepted as a project. No git repository and no worktree is created; you are told to move the files to a folder of their own. A folder you made a git repository yourself is accepted as it is. |
 
 ## Verification command
 
@@ -210,7 +211,7 @@ Unit tests do not run the real CLIs and do not touch the working database. Integ
 - **Claude started read-only:** the original started Claude Code without restrictions, so a Claude HEAD or reviewer could run commands in the worktree or reach the operator's connected apps. The arguments can be changed with `claude_cli.read_only_args` in `config.yaml`.
 - **Switching after a timeout:** when the BUILDER ends in a timeout, the next attempt goes to another CLI at once. The original called the same CLI once more before switching.
 - **Past decisions and change size:** the project's change history is shown to HEAD and the reviewer, and the total change of a mission is written in its final message.
-- **Repositories and database:** no repository is created inside another one; SQLite runs in WAL mode with a wait time.
+- **Repositories and database:** no repository is created inside another one, nor in a folder that is not a project (Downloads, Applications and the like); SQLite runs in WAL mode with a wait time.
 - **macOS paths:** executable names and document paths are read correctly in macOS form as well.
 - **Console:** the Solomon link and the broadcast mode were removed, and the workshop view has a link back to the stage view.
 

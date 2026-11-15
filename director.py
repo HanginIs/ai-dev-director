@@ -188,7 +188,11 @@ def mission(project: str, goal: str, mission_id: Optional[str], max_steps: Optio
     config = load_config()
     if max_steps:
         config.setdefault("autonomy", {})["max_steps"] = max_steps
-    project = str(prepare_project(project))
+    try:
+        project = str(prepare_project(project))
+    except ValueError as exc:        # a folder that must not become a repository: say why, without a traceback
+        click.echo(f"[거절] {exc}")
+        sys.exit(1)
     try:
         from dashboard_server import active_session_id
         sid = active_session_id()
