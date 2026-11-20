@@ -156,10 +156,11 @@ class ClaudeReviewer:
             "```"
         )
 
-        invocation_cmd = 'claude --print'
+        invocation_cmd = 'claude --print --tools Read,Glob,Grep --permission-mode default'
         self.logger.info(f"[Claude Reviewer] Invoking via ProcessTreeRunner: {self.executable} in {wt}")
 
-        cmd = [self.executable, "--print"]
+        from core.env_utils import CLAUDE_READ_ONLY_FLAGS
+        cmd = [self.executable, "--print", *CLAUDE_READ_ONLY_FLAGS]
         res = ProcessTreeRunner.run(
             argv=cmd,
             cwd=str(wt),

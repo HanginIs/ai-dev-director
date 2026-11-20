@@ -43,5 +43,5 @@ def test_shutdown_stops_the_server(http_server):
 
 def test_console_has_stop_button(http_server):
     server, _ = http_server
-    code, body = request(server, 'GET', '/')
+    code, body = request(server, 'GET', '/', headers={'Cookie': 'director_session=test-token'})
     assert code == 200 and 'id="btn-shutdown"'.encode() in body

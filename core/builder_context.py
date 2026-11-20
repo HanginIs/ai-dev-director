@@ -5,7 +5,42 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 
-def referenced_documents(order):
+def reference_roots(worktree_path):
+    """Folders a referenced document may live in: the worktree, the project it was cut from, and the folders the
+    operator listed under safety.reference_roots in config.yaml."""
+    from core.env_utils import root_config, run_capture
+    roots = [Path(worktree_path).resolve()]
+    try:
+        res = run_capture(['git', 'rev-parse', '--git-common-dir'], cwd=str(roots[0]), timeout=10)
+        common = Path(res.stdout.strip())
+        if res.returncode == 0 and res.stdout.strip():
+            common = (common if common.is_absolute() else roots[0] / common).resolve()
+            if common.name == '.git':
+                roots.append(common.parent)
+    except Exception:
+        pass
+    for extra in (root_config().get('safety') or {}).get('reference_roots') or []:
+        try:
+            roots.append(Path(str(extra)).resolve())
+        except OSError:
+            continue
+    return roots
+
+
+def _inside(path, roots):
+    target = path.resolve()
+    for root in roots:
+        try:
+            target.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def referenced_documents(order, roots=None):
+    """roots=None keeps the unrestricted behaviour for direct callers; the Builder always passes reference_roots()
+    (2026-11-20, public review: any absolute .md/.txt/.docx named in an ORDER was read and sent to the provider)."""
     text = '\n'.join([order.goal, order.context or '', *order.acceptance_criteria])
     paths = list(getattr(order, 'reference_paths', []))
     # A drive letter that starts a token (not the 'p' of 'http://', not a URL scheme '://') begins a document path.
@@ -17,6 +52,9 @@ def referenced_documents(order):
         try:
             if not path.is_absolute() or path.is_symlink():
                 raise ValueError('Reference must be an absolute regular file')
+            if roots is not None and not _inside(path, roots):
+                raise ValueError('outside the project and safety.reference_roots; add its folder to '
+                                 'safety.reference_roots in config.yaml to allow it')
             if path.stat().st_size > 10_000_000:
                 raise ValueError('Reference exceeds 10 MB')
             if path.suffix.lower() == '.docx':

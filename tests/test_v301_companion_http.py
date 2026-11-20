@@ -49,6 +49,7 @@ def test_read_bridge_requires_token(http_server):
 
 
 def test_console_static_served(http_server):
-    code, body = request(http_server, 'GET', '/')
+    assert request(http_server, 'GET', '/')[0] == 403        # v3.2.0: the console needs a session
+    code, body = request(http_server, 'GET', '/', headers={'Cookie': 'director_session=test-token'})
     assert code == 200 and 'AI DEV 작업실'.encode() in body
     assert request(http_server, 'GET', '/console.js')[0] == 200

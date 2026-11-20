@@ -153,7 +153,7 @@ def test_empty_scope_is_derived_from_required_outputs(tmp_path):
 
 def test_post_build_triage_fails_closed_on_unknown():
     t = autopilot.split_post_build(["Max diff lines exceeded: 1029 > 800", "Unauthorized file deletion: a.py",
-                                    "Control plane modified: GEMINI.md", "Something new: x"])
+                                    "Control plane modified: GEMINI.md", "Something new: x"], waive_caps=True)
     assert t["waivable"] == ["Max diff lines exceeded: 1029 > 800"]
     assert t["repairable"] == ["Unauthorized file deletion: a.py"]
     assert t["serious"] == ["Control plane modified: GEMINI.md", "Something new: x"]
@@ -300,8 +300,22 @@ def test_money_code_stops_before_tests_run(tmp_path, monkeypatch):
     assert st["stage"] == "POST_BUILD" and st["approvable"] is True
 
 
+def test_cap_overrun_stops_unless_the_operator_opted_in(tmp_path, monkeypatch):
+    # v3.2.0: head_proxy alone no longer waives the caps
+    orch = proxy_orch()
+    quiet(monkeypatch, orch)
+    calls = []
+    monkeypatch.setattr(orch.builder, "run", good_build(calls))
+    review_green(monkeypatch, orch)
+    decide_by_tests(monkeypatch, orch)
+    out = orch.run(str(tmp_path / "proj"), "double", order=OrderSchema(**ORDER, max_files_changed=1))
+    assert out["final_state"] == State.HUMAN_REQUIRED
+    assert "HEAD_PROXY_WAIVER" not in [a["action"] for a in orch.sm.get_audit_logs(out["run_id"])]
+
+
 def test_cap_overrun_is_waived_by_head_proxy(tmp_path, monkeypatch):
     orch = proxy_orch()
+    orch.config["autonomy"]["waive_scope_caps"] = True
     quiet(monkeypatch, orch)
     calls = []
     monkeypatch.setattr(orch.builder, "run", good_build(calls))

@@ -1,6 +1,7 @@
 # AI DEV DIRECTOR configuration
 # Strict NO PAY-PER-USE API policy: every agent runs through an official, signed-in CLI session
-# (Claude Code / OpenAI Codex / Google Antigravity). API keys in the environment are stripped before any CLI call.
+# (Claude Code / OpenAI Codex). API keys, bearer tokens and endpoint overrides in the environment are stripped before
+# any CLI call. Limits: see "알려진 한계" in the README.
 
 head:
   provider: claude        # HEAD plans and directs corrections; the Reviewer judges independently.
@@ -9,14 +10,21 @@ head:
 
 builder:
   mode: proposal          # Builder returns whole files as JSON; the Director validates and writes them.
-  provider: antigravity   # Primary BUILDER: Google Antigravity CLI (failover: codex / claude)
-  model: antigravity-cli
-  executable: null        # Discovered automatically via resolve_cli('agy')
-
-reviewer:
-  provider: codex         # Primary REVIEWER: OpenAI Codex CLI (failover: claude)
+  provider: codex         # BUILDER: OpenAI Codex CLI (failover: claude)
   model: codex-cli
   executable: null        # Discovered automatically via resolve_cli('codex')
+
+reviewer:
+  provider: claude        # REVIEWER: Claude Code CLI (failover: codex)
+  model: claude-code-cli
+  executable: null        # Discovered automatically via resolve_cli('claude')
+
+# Google Antigravity (`agy`) is OFF by default. Google's Antigravity FAQ says that wrapping `agy` inside another
+# application is not supported on consumer plans and can lead to account suspension
+# (https://antigravity.google/docs/faq/). Turn it on only if your plan allows it and you accept that risk; then
+# `provider: antigravity` works for a role again and the three-way TRIAD research mode becomes available.
+antigravity:
+  enabled: false
 
 timeouts:
   head: 300
@@ -26,6 +34,9 @@ timeouts:
   heartbeat: 30
 
 safety:
+  # A document outside the project is handed to the Builder only when it lives in one of these folders.
+  # Example: reference_roots: ["D:/work/specs"]
+  reference_roots: []
   max_files_changed: 15
   max_diff_lines: 1500     # Complete greenfield modules commonly exceed 800; path/file caps still apply.
   approved_commands:
@@ -59,14 +70,18 @@ autonomy:
   # HEAD proxy: HEAD decides on the operator's behalf. Only money (payments, paid services, live-account orders),
   # real credentials/accounts and irreversible external actions stop for a human decision.
   head_proxy: true
+  # false (default): a run that exceeds max_files_changed / max_diff_lines, or touches dependency / build /
+  # permission configuration, stops. true: HEAD proxy lets it through without asking (logged as HEAD_PROXY_WAIVER).
+  waive_scope_caps: false
   builder_attempts: 3          # retry with feedback; the last attempt moves to another provider
   max_steps: 6                 # milestones per mission
   max_consecutive_failures: 3
-  resume_on_start: true        # a companion restart continues interrupted (RUNNING) missions; STOPPED ones stay stopped
+  resume_on_start: false       # true: a companion restart continues interrupted (RUNNING) missions on its own
   # A finished mission is applied to the project on its own:
   # off | on_done (only when HEAD declared the goal done) | on_pass (any PASSED deliverable).
   # Apply never overwrites a file the operator changed meanwhile (conflict -> blocked, worktree kept) and never deletes.
-  auto_apply: on_pass
+  # Default "off": you press 반영 after looking at the result.
+  auto_apply: "off"
   profiles:                    # budgets per request size; gates and Scope Guard are the same in every profile
     quick:    {max_steps: 2, max_repairs: 1, builder_attempts: 2}
     standard: {max_steps: 6, max_repairs: 3, builder_attempts: 3}

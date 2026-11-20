@@ -550,20 +550,28 @@ class ProviderManager:
         self._sync_from_db()
 
         self._probe_and_update("ANTHROPIC", "claude-code-cli", resolve_cli("claude"), force, failure_statuses)
-        self._probe_and_update("GOOGLE", "antigravity-cli", resolve_cli("agy"), force, failure_statuses)
+        from core.env_utils import antigravity_enabled
+        if antigravity_enabled():
+            self._probe_and_update("GOOGLE", "antigravity-cli", resolve_cli("agy"), force, failure_statuses)
+        else:   # opt-in only: see antigravity.enabled in config.yaml
+            self.set_status("GOOGLE", ProviderStatus.UNAVAILABLE, "disabled in config.yaml (antigravity.enabled: false)")
+            self._update_provider_info("GOOGLE", "UNKNOWN", "UNKNOWN")
         self._probe_and_update("OPENAI", "codex-cli", resolve_cli("codex"), force, failure_statuses)
 
         return self.status_map.copy()
 
     def _mode_for_usable(self, usable_list: List[str]) -> Tuple[FailoverMode, List[str]]:
-        """The one mode rule: 3 usable -> NORMAL, 2 -> DEGRADED, otherwise STOP."""
+        """The one mode rule: every enabled provider usable -> NORMAL, 2 -> DEGRADED, otherwise STOP.
+        With Antigravity switched off in config.yaml two providers are the full set."""
+        from core.env_utils import antigravity_enabled
+        full = 3 if antigravity_enabled() else 2
         usable = set(usable_list)
         healthy_providers = [domain for domain in self.status_map if domain in usable]
         down_providers = [
             f"{domain}({status.value})" for domain, status in self.status_map.items()
             if domain not in usable
         ]
-        if len(healthy_providers) == 3:
+        if len(healthy_providers) >= full:
             return FailoverMode.NORMAL, down_providers
         elif len(healthy_providers) == 2:
             return FailoverMode.DEGRADED, down_providers

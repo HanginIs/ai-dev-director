@@ -1,9 +1,14 @@
 # AI DEV DIRECTOR
 
 **세 개의 AI 코딩 CLI를 한 회사처럼 돌려, 목표 한 줄을 검증된 코드로 바꾸는 로컬 개발 감독관.**
-A local orchestrator that runs three subscription AI CLIs (Claude Code, OpenAI Codex, Google Antigravity) as
-HEAD / BUILDER / REVIEWER, and turns a one-line goal into tested, independently reviewed code — without a single
-pay-per-use API call.
+A local orchestrator that runs subscription AI CLIs (Claude Code, OpenAI Codex, optionally Google Antigravity) as
+HEAD / BUILDER / REVIEWER, and turns a one-line goal into tested, independently reviewed code through signed-in CLI
+sessions instead of pay-per-use API keys.
+
+> **완벽한 시스템이 아닙니다.** 저희가 쓰려고 만든 도구를 공개한 것입니다. AI가 쓴 코드와 테스트를 이 PC에서
+> 그대로 실행합니다. 처음에는 **분리된 가상 PC나 버려도 되는 계정에서 작은 작업으로** 써 보시길 권합니다.
+> 아래 [알려진 한계](#알려진-한계-known-limits)를 먼저 읽어 주세요.
+> **This is not a hardened product.** It runs AI-written code and tests on your machine. Try it in a VM first.
 
 > 상태: 개인 운영 환경에서 매일 쓰고 있는 코드를 그대로 공개한 것입니다. 윈도우 우선, 한국어 UI.
 > **macOS / Linux: 코드는 준비돼 있지만 미검증입니다** (v3.1.8, 아래 참고). 맥에서 돌려 보신 분은 이슈로 알려 주시면 고맙겠습니다.
@@ -28,7 +33,8 @@ pay-per-use API call.
   스냅샷에서 시작하며, 실제 증거(테스트·리뷰)를 보고 다시 계획합니다. 완료된 산출물은 설정에 따라 자동 반영되되
   사람이 그 사이 고친 파일은 덮어쓰지 않습니다.
 - **HEAD 프록시 자율 모드** — 결제·실계좌 주문·실제 자격증명·되돌릴 수 없는 외부 행동만 사람에게 묻고, 나머지
-  마찰(빌더 JSON 깨짐, 토큰 한도, 경로 범위, 리뷰 지적, 한도 초과)은 재시도·공급자 교체·재계획으로 스스로 풉니다.
+  마찰(빌더 JSON 깨짐, 토큰 한도, 경로 범위, 리뷰 지적)은 재시도·공급자 교체·재계획으로 스스로 풉니다.
+  파일 수·diff 상한 초과와 의존성·빌드·권한 설정 변경은 기본값에서 통과시키지 않습니다(`autonomy.waive_scope_caps`).
 - **TRIAD 연구 모드** — 세 AI가 독립 연구 → 상호 비판 → 종합 가설 → NORMAL 파이프라인으로 실험 구현 → 세 갈래
   해석 → 연구 메모리. 설계와 구현은 `docs/V3_TRIAD_RESEARCH_PLAN.md`.
 - **TRINITY 콘솔(8081)** — 세 AI의 역할·호출·토큰·현재 단계를 보여주는 무대형 대시보드, 채팅, 미션 다시보기,
@@ -38,9 +44,12 @@ pay-per-use API call.
 
 | 규칙 | 구현 |
 |---|---|
-| 종량제 API 금지 — 로그인된 구독 CLI만 사용 | `core/env_utils.py` 가 모든 `*_API_KEY` 를 환경에서 제거하고 CLI를 호출 |
+| 종량제 API 차단(환경 변수 범위) | `core/env_utils.py` 가 모든 `*_API_KEY`, 인증 토큰, 엔드포인트·클라우드 과금 전환 변수를 지우고 CLI와 검증 명령을 실행. CLI 자체를 API 키로 로그인해 둔 경우는 막지 못함 |
+| Claude 역할은 읽기 도구만 | HEAD·REVIEWER·연구·빌더의 Claude 호출은 `--tools Read,Glob,Grep --permission-mode default`, MCP 서버 없이 실행 |
 | 원본 프로젝트 무수정 | 모든 빌드는 `.director_worktrees/` 안의 git worktree에서만 |
-| Scope Guard | ORDER의 허용 경로·보호 경로·파일 수·diff 상한을 Director가 검사, 빌더는 완화 불가 (`core/safety.py`) |
+| Scope Guard | ORDER의 허용 경로·보호 경로·파일 수·diff 상한을 Director가 검사, 빌더는 완화 불가 (`core/safety.py`). 상한을 넘으면 정지 — 운영자가 `waive_scope_caps: true` 로 직접 풀었을 때만 통과 |
+| 프로젝트 밖 문서 | ORDER에 적힌 절대 경로 문서는 프로젝트 안이거나 `safety.reference_roots` 에 있을 때만 빌더에 전달 |
+| 콘솔 명령은 연결된 브라우저만 | 상태를 바꾸는 모든 요청은 로컬 출처 검사 + 세션(연결 주소로 한 번 접속) 또는 브리지 토큰 필요 |
 | 리뷰어 fail-closed | 리뷰 응답이 없거나 깨지면 PASS가 아니라 FAIL |
 | 돈·자격증명은 사람이 | `core/autopilot.py` 의 정지 조건 — 결제, 실계좌 주문 코드(`OrderSend` 등), 계정 생성, 외부 비가역 행동 |
 | 프로세스 트리 타임아웃 | 멈춘 CLI는 자식까지 함께 종료 (`core/process_runner.py`) |
@@ -54,26 +63,34 @@ pay-per-use API call.
   없으면 콘솔에 경로를 직접 입력하면 됩니다.
 - Python 3.9+ 와 `pip install -r requirements.txt`
 - Git
-- 로그인된 CLI 중 최소 두 개: **Claude Code**(`claude`), **OpenAI Codex**(`codex`), **Google Antigravity**(`agy`).
-  구독 로그인 세션을 그대로 씁니다. API 키는 필요 없고, 있어도 무시됩니다.
+- 로그인된 CLI 두 개: **Claude Code**(`claude`, `--tools` 옵션을 지원하는 최근 버전), **OpenAI Codex**(`codex`).
+  구독 로그인 세션을 그대로 씁니다. API 키는 필요 없습니다. 환경 변수의 키는 지우고 실행하지만,
+  **CLI를 API 키로 로그인해 두었다면 그 키로 과금됩니다** — 구독 로그인인지 먼저 확인하세요.
+- **Google Antigravity(`agy`)는 기본 꺼짐입니다.** 구글 Antigravity FAQ는 `agy`를 다른 애플리케이션 안에 감싸 쓰는
+  것을 소비자 플랜에서 지원하지 않으며 계정 정지로 이어질 수 있다고 적고 있습니다
+  ([FAQ](https://antigravity.google/docs/faq/)). 본인 플랜이 허용하고 위험을 감수할 때만 `config.yaml` 의
+  `antigravity.enabled: true` 로 켜세요. 켜야 세 AI를 쓰는 TRIAD 연구 모드가 동작합니다.
 
 ## 빠른 시작 (Quick start)
 
 ```bash
 pip install -r requirements.txt
-python -m pytest -q            # 604개 테스트, CLI 없이 스텁으로 돕니다 (약 25분)
+python -m pytest -q            # 625개 테스트, CLI 없이 스텁으로 돕니다 (약 25~35분)
 ```
 
-2026-11-04 기준 593/596 통과, 3개 실패 (v3.1.8에서 플랫폼 분기 테스트 8개 추가, 윈도우에서 통과). 실패 3개는 알려진 드리프트입니다: 두 개는 "저장소가 아닌 폴더는 거부"를
+2026-11-21 기준 620/623 통과, 3개 실패 (v3.2.0에서 안전 수정 테스트 21개 추가, 윈도우에서 통과). 실패 3개는 알려진 드리프트입니다: 두 개는 "저장소가 아닌 폴더는 거부"를
 기대하는 옛 UI 테스트인데 v3.0부터 빈 폴더도 자동 준비(greenfield)하도록 바뀌었고, 하나는 스냅샷 제외 목록 픽스처
 드리프트입니다. 안전 게이트·정책·미션 테스트는 모두 통과합니다.
 
 콘솔 켜기 (윈도우):
 
 ```powershell
-.\start-companion.ps1          # http://127.0.0.1:8081  (TRINITY 무대)  ·  /classic (작업실)
+.\start-companion.ps1          # 연결 주소(http://127.0.0.1:8081/?token=...)를 출력합니다
 .\stop-companion.ps1
 ```
+
+처음 한 번은 **출력된 연결 주소**로 접속하세요. 그 브라우저는 이후 `http://127.0.0.1:8081` 로 바로 열립니다
+(`/classic` 은 작업실 화면). 연결하지 않은 브라우저와 프로그램은 명령을 보낼 수 없습니다.
 
 콘솔 켜기 (macOS / Linux, 미검증):
 
@@ -83,7 +100,7 @@ chmod +x start-companion.sh stop-companion.sh
 ./stop-companion.sh
 ```
 
-Antigravity CLI(`agy`)가 그 플랫폼에 없으면 `config.yaml`에서 BUILDER를 `codex` 또는 `claude`로 바꾸면 됩니다. CLI 두 개로도 동작합니다.
+기본 역할은 HEAD=Claude, BUILDER=Codex, REVIEWER=Claude 입니다. 콘솔의 역할 버튼이나 `config.yaml` 로 바꿀 수 있습니다.
 
 CLI로 바로 한 번 돌리기:
 
@@ -116,11 +133,29 @@ core/                  orchestrator, mission, autopilot(정책), safety(Scope Gu
 schemas/               ORDER / BuilderResult / ReviewResult / Decision / Provenance (pydantic)
 console/               TRINITY 무대와 작업실 프런트엔드 (의존성 없는 정적 파일)
 scripts/               폴더 선택 도우미, CLI 진단, 실패 run 재시도, 역할 smoke
-tests/                 604 tests (스텁 CLI로 격리, 로컬 설정 파일에 의존하지 않음; 실제 CLI 통합은 -m integration_cli 로 opt-in)
+tests/                 625 tests (스텁 CLI로 격리, 로컬 설정 파일에 의존하지 않음; 실제 CLI 통합은 -m integration_cli 로 opt-in)
 docs/                  설계·마일스톤 기록
 ```
 
 ## 알려진 한계 (Known limits)
+
+**안전 관련 — 먼저 읽어 주세요**
+
+- **AI가 쓴 테스트와 빌드 명령은 격리 없이, 당신의 OS 계정 권한 그대로 실행됩니다.** git worktree는 파일 변경을
+  원본과 분리할 뿐 샌드박스가 아닙니다. 그 코드는 홈 폴더의 파일을 읽을 수 있고 네트워크에 접근할 수 있습니다.
+  중요한 계정이 로그인된 PC보다 가상 PC·컨테이너·별도 OS 계정에서 쓰는 것이 안전합니다.
+- **"구독만 사용" 표시는 측정값이 아니라 선언값입니다.** 기록의 `api_key_used: false` 는 Director가 환경 변수의
+  키를 지우고 호출했다는 뜻일 뿐, CLI가 실제로 무엇으로 과금됐는지 확인한 값이 아닙니다.
+- **사용량 한도 기능이 없습니다.** 각 CLI의 구독 한도에 그대로 맡깁니다. 미션은 단계 수(`max_steps`)와 재시도
+  횟수로만 제한됩니다.
+- **같은 OS 계정으로 도는 다른 프로그램은 막지 못합니다.** 그런 프로그램은 `data/solomon-bridge.token` 을 읽을 수
+  있습니다. 세션·토큰은 포트에만 닿을 수 있는 프로세스와 다른 웹 페이지를 막습니다.
+- **Claude 역할은 프로젝트 폴더에서 읽기 도구로 돕니다.** 쓰기·셸·MCP는 꺼 두었지만 프로젝트 안의 파일은 읽습니다.
+- **Codex는 `--sandbox read-only` 로 부릅니다.** 읽기 범위는 Codex 샌드박스 정책을 따릅니다.
+- `autonomy.waive_scope_caps`, `resume_on_start`, `auto_apply` 를 켜면 사람 확인 없이 진행되는 범위가 넓어집니다.
+  기본값은 모두 꺼짐입니다.
+
+**그 밖에**
 
 - 큰 변경도 "파일 전체 JSON 제안" 방식이라 CLI 출력 한도에 걸릴 수 있습니다. 한 번은 압축 재시도, 그 다음은 공급자 교체.
 - 각 CLI의 구독 한도(쿼터)에 그대로 종속됩니다. 한도가 끝나면 장애 조치 순서대로 다른 CLI로 넘어갑니다.

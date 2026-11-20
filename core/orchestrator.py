@@ -734,7 +734,7 @@ class Orchestrator:
             self.sm.log_audit(run_id, "ORCHESTRATOR", "SCOPE_WAIVER_APPLIED", json.dumps({"waivers": waivers, "remaining_violations": scope_violations}, ensure_ascii=False))
         repairable = []
         if not scope_ok and self._proxy():
-            triage = autopilot.split_post_build(scope_violations)
+            triage = autopilot.split_post_build(scope_violations, waive_caps=bool(autopilot.setting(self.config, "waive_scope_caps", False)))
             if not triage["serious"]:
                 if triage["waivable"]:
                     self.sm.log_audit(run_id, "HEAD", "HEAD_PROXY_WAIVER", json.dumps(triage["waivable"], ensure_ascii=False))
