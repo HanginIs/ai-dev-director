@@ -53,8 +53,11 @@ async function setupRoles(){
  const order=['head','builder','reviewer'],names={head:'HEAD · 작업 지휘',builder:'BUILDER · 코드 작성',reviewer:'REVIEWER · 검수'};
  let roles,csrf,saving=false,pair=false;   // pair: Antigravity off, two AIs hold the three roles
  const notice=el('p','역할 불러오는 중…','role-notice');notice.setAttribute('aria-live','polite');doc.getElementById('corestrip').after(notice);
+ // Antigravity switch (data/antigravity.json): off = Claude and Codex share the three roles
+ const agRow=el('div','','ag-row'),agButton=el('button','Antigravity 확인 중…','role-cycle ag-switch');agButton.type='button';agButton.disabled=true;agRow.append(agButton);notice.before(agRow);
  const buttons={};
- function paint(){for(const [domain,provider] of Object.entries(domains)){const b=buttons[domain];if(pair&&provider==='antigravity'){b.hidden=true;continue;}const held=order.filter(r=>roles[r]===provider).map(r=>names[r]).join(' + ')||'역할 없음';b.hidden=false;b.textContent='다음: '+held+' ↻';b.disabled=saving;b.setAttribute('aria-label',domain+' 역할 변경. 현재 예약 '+held);}}
+ function paint(){agButton.textContent=pair?'Antigravity 꺼짐 · 켜기':'Antigravity 켜짐 · 끄기';agButton.disabled=saving||!roles;agButton.setAttribute('aria-pressed',String(!pair));
+  for(const [domain,provider] of Object.entries(domains)){const b=buttons[domain];if(pair&&provider==='antigravity'){b.hidden=true;continue;}const held=order.filter(r=>roles[r]===provider).map(r=>names[r]).join(' + ')||'역할 없음';b.hidden=false;b.textContent='다음: '+held+' ↻';b.disabled=saving;b.setAttribute('aria-label',domain+' 역할 변경. 현재 예약 '+held);}}
  for(const [domain,provider] of Object.entries(domains)){
   const button=el('button','역할 연결 중…','role-cycle');button.type='button';button.disabled=true;buttons[domain]=button;doc.getElementById('node-'+domain)?.append(button);
   button.onclick=async()=>{if(saving||!roles)return;saving=true;paint();let next={...roles};
@@ -63,6 +66,11 @@ async function setupRoles(){
    try{const response=await fetch('/ops/roles',{method:'POST',headers:{'Content-Type':'application/json','X-Solomon-Bridge':csrf},body:JSON.stringify(next)});const result=await response.json();if(!response.ok)throw Error(result.error||'저장 실패');roles=result.roles;notice.textContent=result.message;}
    catch(error){notice.textContent='역할 변경 실패 · '+error.message;}finally{saving=false;paint();}};
  }
+ agButton.onclick=async()=>{if(saving||!roles)return;const turnOn=pair;
+  if(turnOn&&!window.confirm('Google Antigravity FAQ는 agy를 다른 앱 안에서 감싸 쓰는 것을 개인 요금제에서 지원하지 않는다고 적고 있고, 계정 정지 사례도 보고됩니다.\n\n위험을 감수하고 Antigravity를 켤까요?'))return;
+  saving=true;paint();
+  try{const response=await fetch('/ops/antigravity',{method:'POST',headers:{'Content-Type':'application/json','X-Solomon-Bridge':csrf},body:JSON.stringify({enabled:turnOn})});const result=await response.json();if(!response.ok)throw Error(result.error||'저장 실패');roles=result.roles;pair=!result.enabled;notice.textContent=result.message;}
+  catch(error){notice.textContent='Antigravity 스위치 실패 · '+error.message;}finally{saving=false;paint();}};
  try{const response=await fetch('/ops/roles',{cache:'no-store'});if(!response.ok)throw Error('설정 조회 실패');const result=await response.json();roles=result.roles;csrf=result.csrf;pair=result.antigravity===false;paint();notice.textContent=(pair?'Antigravity 꺼짐 · 버튼을 누르면 두 AI의 역할을 맞바꿉니다.':'버튼을 누르면 역할이 순환하고 상대 AI와 교환됩니다.')+' 다음 대화/작업부터 적용 · 현재 실행과 TRIAD 연구 배정은 유지';}catch(error){notice.textContent=error.message;}
 }
 

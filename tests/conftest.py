@@ -117,6 +117,13 @@ def isolate_provider_db(request, monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def private_antigravity_switch(monkeypatch, tmp_path):
+    """The console's Antigravity switch (data/antigravity.json) is the operator's; tests never read or write it."""
+    from core import env_utils
+    monkeypatch.setattr(env_utils, "ANTIGRAVITY_SWITCH", tmp_path / "antigravity-switch.json")
+
+
+@pytest.fixture(autouse=True)
 def pinned_role_settings(monkeypatch, tmp_path):
     """The suite must not depend on the operator's local data/role_settings.json. The mode/truthfulness tests
     (v0237/v0241/v0247) were written against the HEAD=OpenAI assignment, so every test starts from that manual

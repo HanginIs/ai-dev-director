@@ -57,3 +57,6 @@
 .director-v2 .ai-card-usage.busy{color:var(--green)}
 @media(max-width:1100px){.ai-grid{grid-template-columns:1fr}}
 @media(max-width:800px){.ai-row{grid-template-columns:1fr 1fr;row-gap:2px}.ai-row.head{display:none}}
+.director-v2 .ag-row { margin:8px 2px 0; }
+.director-v2 .ag-switch[aria-pressed="true"] { border-color:#c98a2b; color:#f0c27a; }
+.director-v2 .ag-switch { width:auto; margin-top:0; }

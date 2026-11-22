@@ -245,6 +245,34 @@ class CompanionHandler(d.DashboardHandler):
         self.end_headers(); self.wfile.write(body)
 
     def do_POST(self):
+        if self.path == '/ops/antigravity':
+            if not d.is_request_origin_allowed(self.headers, self.server.server_address[1])[0] or not self.authorized():
+                return self._send_json({'error': 'local authenticated request required'}, 403)
+            try:
+                size = int(self.headers.get('Content-Length', '0'))
+                if not 0 < size <= 256 or self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+                    raise ValueError('Invalid switch request')
+                from core.role_settings import set_antigravity
+                enabled = json.loads(self.rfile.read(size)).get('enabled')
+                roles = set_antigravity(enabled)
+                try:
+                    # Re-probe at once: the Antigravity card and the "3 AIs ready" line must show the switch now,
+                    # not after the next manual 새로고침 (cheap version probes, same as /providers/refresh).
+                    d.refresh_providers()
+                    from core.provider_manager import ProviderManager
+                    ProviderManager().resolve_roles(roles['head'], roles['builder'], roles['reviewer'], strict=True)
+                except Exception:
+                    pass
+                d.invalidate_status_cache()
+                names = {'openai': 'Codex', 'claude': 'Claude', 'antigravity': 'Antigravity'}
+                text = ' · '.join(r.upper() + '=' + names[p] for r, p in roles.items())
+                message = ('Antigravity를 켰습니다. ' if enabled else 'Antigravity를 껐습니다. 이제 agy를 부르지 않습니다. ') + \
+                          '역할: ' + text + ' (다음 작업부터 적용)'
+                return self._send_json({'enabled': enabled, 'roles': roles, 'message': message})
+            except ValueError as exc:
+                return self._send_json({'error': str(exc)}, 400)
+            except Exception as exc:
+                return self._send_json({'error': str(exc)[:300]}, 500)
         if self.path == '/ops/roles':
             if not d.is_request_origin_allowed(self.headers, self.server.server_address[1])[0] or not self.authorized():
                 return self._send_json({'error': 'local authenticated request required'}, 403)

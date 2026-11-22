@@ -76,12 +76,29 @@ def _merge(base: dict, over: dict) -> None:
             base[key] = value
 
 
+ANTIGRAVITY_SWITCH = Path(__file__).resolve().parent.parent / "data" / "antigravity.json"
+
+
+def antigravity_switch() -> Optional[bool]:
+    """The console's Antigravity switch (data/antigravity.json, machine-local). None when it was never used."""
+    try:
+        import json
+        value = json.loads(ANTIGRAVITY_SWITCH.read_text(encoding="utf-8")).get("enabled")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return value if isinstance(value, bool) else None
+
+
 def antigravity_enabled() -> bool:
     """Google's Antigravity FAQ says wrapping `agy` inside another application is not supported on consumer plans
-    and can lead to account suspension. `antigravity.enabled: false` in config.yaml makes the Director never
-    discover or call it. A missing key keeps the earlier behaviour; the published config ships it as false."""
+    and can lead to account suspension. Off, the Director never discovers or calls it. The console switch
+    (data/antigravity.json) wins over `antigravity.enabled` in config.yaml / config.local.yaml. A config without the
+    key keeps the earlier behaviour; the shipped config sets it to false."""
     if os.environ.get("DIRECTOR_TESTING") == "1":
         return True
+    switch = antigravity_switch()
+    if switch is not None:
+        return switch
     return bool((root_config().get("antigravity") or {}).get("enabled", True))
 
 

@@ -30,7 +30,7 @@
 - Python 3.9 이상, Git
 - 앱을 빌드하려면 Xcode(Swift 5.9 이상)
 - 로그인된 CLI 두 개 이상: `claude`(Claude Code 2.1.259 이상), `codex`, `agy`. 구독 로그인 세션을 그대로 씁니다. API 키는 필요 없고, 환경 변수에 있어도 CLI를 부르기 전에 지웁니다. 다만 **CLI 자체를 API 키로 로그인해 두었다면 그 키로 과금됩니다.**
-- **Antigravity(`agy`) 주의:** 구글 Antigravity FAQ는 `agy`를 다른 애플리케이션 안에 감싸 쓰는 것을 소비자 플랜에서 지원하지 않는다고 적고 있고, 계정 정지 사례도 보고됩니다. 그래서 원본 v3.2.0처럼 **기본으로 꺼 두었습니다.** 위험을 감수하고 쓰려면 `config.local.yaml`에 `antigravity: {enabled: true}`를 적으세요. 그때부터 역할을 Antigravity에 줄 수 있고 세 AI TRIAD 연구가 됩니다. 저장해 둔 역할에 Antigravity가 있는데 꺼져 있으면 그 저장값은 무시하고 `config.yaml`의 역할을 씁니다.
+- **Antigravity(`agy`) 주의:** 구글 Antigravity FAQ는 `agy`를 다른 애플리케이션 안에 감싸 쓰는 것을 소비자 플랜에서 지원하지 않는다고 적고 있고, 계정 정지 사례도 보고됩니다. 그래서 원본 v3.2.0처럼 **기본으로 꺼 두었습니다.** 위험을 감수하고 쓰려면 작업실 화면의 **Antigravity 꺼짐 · 켜기** 버튼을 누르거나(경고를 한 번 확인합니다) `config.local.yaml`에 `antigravity: {enabled: true}`를 적으세요. 콘솔 스위치(`data/antigravity.json`)가 설정 파일보다 우선합니다. 켜면 두 역할을 맡던 AI의 BUILDER가 Antigravity로 가고, 끄면 Antigravity의 역할이 BUILDER와 REVIEWER가 서로 다르게 Claude나 Codex로 돌아갑니다. 그때부터 역할을 Antigravity에 줄 수 있고 세 AI TRIAD 연구가 됩니다. 저장해 둔 역할에 Antigravity가 있는데 꺼져 있으면 그 저장값은 무시하고 `config.yaml`의 역할을 씁니다.
 
 ## 설치와 실행
 

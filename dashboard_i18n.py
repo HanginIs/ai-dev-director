@@ -292,6 +292,9 @@ def mode_sentence(mode: str, statuses: Dict[str, str]) -> str:
         if st and st != "HEALTHY":
             bad.append(f"{names[d]}{' 백업 AI가' if d == 'ANTHROPIC' else '가'} {status_ko(st)}입니다.")
     if mode == "NORMAL":
+        from core.env_utils import antigravity_enabled
+        if not antigravity_enabled():          # two AIs are the full set while the Antigravity switch is off
+            return "Codex와 Claude 모두 정상 사용 가능합니다. (Antigravity 꺼짐)"
         return "3개 AI 모두 정상 사용 가능합니다."
     usable = len(ok) + (1 if any("복구 중" in b for b in bad) and mode == "DEGRADED" and len(ok) < 2 else 0)
     tail = (" " + "와 ".join(ok) + ("는" if len(ok) == 1 else "는") + " 정상 사용 가능합니다.") if ok else ""

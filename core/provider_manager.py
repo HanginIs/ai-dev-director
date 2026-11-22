@@ -555,7 +555,7 @@ class ProviderManager:
         if antigravity_enabled():
             self._probe_and_update("GOOGLE", "antigravity-cli", resolve_cli("agy"), force, failure_statuses)
         else:   # opt-in only: see antigravity.enabled in config.yaml
-            self.set_status("GOOGLE", ProviderStatus.UNAVAILABLE, "disabled in config.yaml (antigravity.enabled: false)")
+            self.set_status("GOOGLE", ProviderStatus.UNAVAILABLE, "switched off (console Antigravity switch or antigravity.enabled: false)")
             self._update_provider_info("GOOGLE", "UNKNOWN", "UNKNOWN")
         self._probe_and_update("OPENAI", "codex-cli", resolve_cli("codex"), force, failure_statuses)
 
