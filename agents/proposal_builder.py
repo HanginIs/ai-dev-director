@@ -89,8 +89,8 @@ class ProposalBuilder(AntigravityBuilder):
         usage.set_context(role='BUILDER')
         self.last_execution_info = {'exit_code': None, 'attempts': [], 'output': ''}
         root = Path(worktree_path).resolve()
-        from core.builder_context import referenced_documents
-        documents = referenced_documents(order)
+        from core.builder_context import referenced_documents, reference_roots
+        documents = referenced_documents(order, reference_roots(root))
         sources = {}
         candidates = []
         for directory, dirs, names in os.walk(root, followlinks=False):

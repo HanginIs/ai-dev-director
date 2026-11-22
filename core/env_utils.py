@@ -4,29 +4,94 @@ import sys
 from pathlib import Path
 from typing import Dict, Optional
 
+# Named examples kept for callers/tests; the real rule is in is_billing_variable().
 FORBIDDEN_API_KEYS = [
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
-    "AZURE_OPENAI_API_KEY"
+    "AZURE_OPENAI_API_KEY",
+    "CODEX_API_KEY",
 ]
+
+# Variables that move a CLI off its subscription login: bearer tokens, endpoint overrides and cloud-billing switches.
+BILLING_VARIABLES = {
+    "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL",
+    "ANTHROPIC_VERTEX_PROJECT_ID", "ANTHROPIC_FOUNDRY_RESOURCE", "ANTHROPIC_FOUNDRY_BASE_URL",
+    "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "AWS_BEARER_TOKEN_BEDROCK",
+    "OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENAI_ORG_ID", "OPENAI_ORGANIZATION",
+    "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_GCA", "GOOGLE_GEMINI_BASE_URL", "GOOGLE_VERTEX_BASE_URL",
+}
+
+
+def is_billing_variable(name: str) -> bool:
+    """Rule, not a list (2026-11-20, public review: five named keys let CODEX_API_KEY and friends through):
+    every *_API_KEY, plus the known token / endpoint / cloud-billing switches."""
+    upper = (name or "").upper()
+    return upper.endswith("_API_KEY") or upper.endswith("_API_KEYS") or upper in BILLING_VARIABLES
+
 
 def get_sanitized_env() -> Dict[str, str]:
     """
-    Builds a sanitized environment dictionary with all pay-per-use API keys stripped.
-    Ensures that official CLI tools operate strictly using user subscription login sessions.
+    Environment for every CLI call and every verification command, with pay-per-use credentials stripped.
+    This covers environment variables only: a CLI that was itself logged in with an API key (for example
+    `codex login --with-api-key`) still bills that key, and the Director cannot see that from here.
     """
     env = os.environ.copy()
-    for k in FORBIDDEN_API_KEYS:
-        env.pop(k, None)
+    for k in list(env):
+        if is_billing_variable(k):
+            env.pop(k, None)
     return env
+
+
+# Claude Code's read-only arguments live in core/claude_cli.py (this fork's stricter set, 2026-11-12).
+
+_ROOT_CONFIG = Path(__file__).resolve().parent.parent / "config.yaml"
+_config_cache = {"mtime": None, "data": {}}
+
+
+def root_config() -> dict:
+    """config.yaml next to the Director with the git-ignored config.local.yaml merged over it (as director.load_config
+    does), re-read when either changes. Unreadable -> {}."""
+    local = _ROOT_CONFIG.with_name("config.local.yaml")
+    try:
+        mtime = (_ROOT_CONFIG.stat().st_mtime, local.stat().st_mtime if local.exists() else None)
+        if _config_cache["mtime"] != mtime:
+            import yaml
+            data = yaml.safe_load(_ROOT_CONFIG.read_text(encoding="utf-8")) or {}
+            if local.exists():
+                _merge(data, yaml.safe_load(local.read_text(encoding="utf-8")) or {})
+            _config_cache["data"] = data
+            _config_cache["mtime"] = mtime
+    except Exception:
+        return {}
+    return _config_cache["data"]
+
+
+def _merge(base: dict, over: dict) -> None:
+    for key, value in over.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge(base[key], value)
+        else:
+            base[key] = value
+
+
+def antigravity_enabled() -> bool:
+    """Google's Antigravity FAQ says wrapping `agy` inside another application is not supported on consumer plans
+    and can lead to account suspension. `antigravity.enabled: false` in config.yaml makes the Director never
+    discover or call it. A missing key keeps the earlier behaviour; the published config ships it as false."""
+    if os.environ.get("DIRECTOR_TESTING") == "1":
+        return True
+    return bool((root_config().get("antigravity") or {}).get("enabled", True))
+
 
 def resolve_cli(name: str) -> Optional[str]:
     """
     Discovers the official CLI executable from OS PATH or standard install locations.
     Returns the resolved absolute path or None.
     """
+    if name == "agy" and not antigravity_enabled():
+        return None
     # Desktop CLIs live in versioned directories that change after app updates.
     # Prefer native binaries over stale npm wrappers, without changing PATH globally.
     if os.name == 'nt' and os.environ.get('DIRECTOR_TESTING') != '1':

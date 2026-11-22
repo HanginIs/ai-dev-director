@@ -156,14 +156,16 @@ def test_research_start_route_rejects_foreign_origin_and_invalid_input(monkeypat
     monkeypatch.setattr(dashboard_server, "start_dashboard_research",
                         lambda topic, providers: topics.append((topic, tuple(providers))) or {"status": "started"})
 
-    def post(body, origin="http://127.0.0.1:8080", ajax="fetch"):
+    def post(body, origin="http://127.0.0.1:8080", ajax="fetch", session=True):
         handler = CompanionHandler.__new__(CompanionHandler)
-        handler.server = type("Server", (), {"server_address": ("127.0.0.1", 8080)})()
+        handler.server = type("Server", (), {"server_address": ("127.0.0.1", 8080), "bridge_token": "test-token"})()
         handler.path = "/research/start"
         handler.headers = Message()
         handler.headers["Host"] = "127.0.0.1:8080"
         handler.headers["Origin"] = origin
         handler.headers["X-Requested-With"] = ajax
+        if session:                                       # v3.2.0: state changes need the console session
+            handler.headers["Cookie"] = "director_session=test-token"
         handler.headers["Content-Type"] = "application/json"
         handler.headers["Content-Length"] = str(len(body))
         handler.rfile = io.BytesIO(body)
@@ -177,6 +179,7 @@ def test_research_start_route_rejects_foreign_origin_and_invalid_input(monkeypat
 
     assert post(b'{"topic":"research"}', origin="https://example.invalid") == 403
     assert post(b'{"topic":"research"}', ajax="") == 403
+    assert post(b'{"topic":"research"}', session=False) == 403
     assert post(b'[]') == 400
     assert post(b'{"topic":"research","mode":"unknown"}') == 400
     assert topics == []

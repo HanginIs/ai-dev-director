@@ -85,7 +85,7 @@ final class DirectorApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     @objc func showAbout() {
         let credits = """
         HanginIs 수정판
-        원본: DAVZD ai-dev-director v3.1.8 (MIT License)
+        원본: DAVZD ai-dev-director v3.1.8 · v3.2.0 안전 수정 반영 (MIT License)
 
         수정 사항: macOS 전용 앱(Swift · WKWebView), 프로젝트별 테스트 명령 자동 감지, \
         검수한 결과만 반영 · 검증 안 한 결과는 자동 반영 안 함, 미션 판정 · 정지 처리 보강, \
@@ -106,15 +106,28 @@ final class DirectorApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         starting = true; status.isHidden = false; status.stringValue = "서버에 연결하고 있습니다…"
         probe(remaining: 40, allowLaunch: true)
     }
+    /// The console needs a session since v3.2.0: the token file (readable only by this user) unlocks it.
+    func bridgeToken() -> String? {
+        guard let raw = try? String(contentsOf: root.appendingPathComponent("data/solomon-bridge.token"), encoding: .utf8) else { return nil }
+        let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : token
+    }
+    /// The login link sets the session cookie in this web view and redirects to the console (the token leaves the URL).
+    func consoleURL() -> URL {
+        guard let token = bridgeToken(), var parts = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return base }
+        parts.path = "/"; parts.queryItems = [URLQueryItem(name: "token", value: token)]
+        return parts.url ?? base
+    }
     func probe(remaining: Int, allowLaunch: Bool) {
         var request = URLRequest(url: base.appendingPathComponent("ops/roles")); request.timeoutInterval = 2
+        if let token = bridgeToken() { request.setValue(token, forHTTPHeaderField: "X-Solomon-Bridge") }
         URLSession.shared.dataTask(with: request) { data, response, error in
             let json = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
             let valid = (response as? HTTPURLResponse)?.statusCode == 200 && json?["roles"] != nil && json?["csrf"] is String
             DispatchQueue.main.async {
                 if valid {
                     self.starting = false
-                    self.web.load(URLRequest(url: self.base)); return
+                    self.web.load(URLRequest(url: self.consoleURL())); return
                 }
                 if response != nil {
                     self.fail("설정된 포트에서 다른 응답이 왔습니다. 기존 서버와 companion.json의 포트를 확인해 주세요."); return
@@ -213,9 +226,9 @@ final class DirectorApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     /// .unreachable: nothing is listening on the port (the server is already down, e.g. stopped with the console's
     /// 시스템 중지 button), as opposed to a server that answered with an error or did not answer in time.
     func post(_ path: String, completion: @escaping (PostResult) -> Void) {
-        guard let token = try? String(contentsOf: root.appendingPathComponent("data/solomon-bridge.token"), encoding: .utf8) else { completion(.failed); return }
+        guard let token = bridgeToken() else { completion(.failed); return }
         var request = URLRequest(url: base.appendingPathComponent(path)); request.httpMethod = "POST"; request.timeoutInterval = 20
-        request.setValue(token.trimmingCharacters(in: .whitespacesAndNewlines), forHTTPHeaderField: "X-Solomon-Bridge")
+        request.setValue(token, forHTTPHeaderField: "X-Solomon-Bridge")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = Data("{}".utf8)
         URLSession.shared.dataTask(with: request) { _, response, error in
             if (response as? HTTPURLResponse)?.statusCode == 200 { completion(.ok); return }

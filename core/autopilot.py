@@ -84,6 +84,10 @@ def is_serious_text(text: str) -> bool:
 USER_STOP_MARKERS = (
     "USER_DECISION", "Live money code", "Control plane modified", "Path escapes worktree", "Protected path modified",
     "File modified outside allowed_paths", "PROVIDER_FAILURE", "No usable provider",
+    # Reached only when autonomy.waive_scope_caps is off: a dependency / build / permission configuration change is
+    # the user's call. (A file-count or diff-size overflow is not listed: the mission re-plans a smaller step.)
+    "Dependency configuration modified", "Critical build/architecture configuration modified",
+    "Permission configuration modified",
 )
 
 
@@ -150,12 +154,14 @@ WAIVABLE_PREFIXES = (
 REPAIRABLE_PREFIXES = ("Unauthorized file deletion", "Unauthorized deletion of existing")
 
 
-def split_post_build(violations: List[str]) -> Dict[str, List[str]]:
+def split_post_build(violations: List[str], waive_caps: bool = False) -> Dict[str, List[str]]:
     """serious (stop) / waivable (HEAD proxy approves) / repairable (back to the Builder).
-    Anything unrecognised is serious: fail closed."""
+    Anything unrecognised is serious: fail closed. The cap and configuration findings are waivable only when the
+    operator opted in with autonomy.waive_scope_caps (2026-11-20: they used to be waived whenever head_proxy was on,
+    which made max_files_changed / max_diff_lines advisory)."""
     out = {"serious": [], "waivable": [], "repairable": []}
     for v in violations or []:
-        if v.startswith(WAIVABLE_PREFIXES):
+        if waive_caps and v.startswith(WAIVABLE_PREFIXES):
             out["waivable"].append(v)
         elif v.startswith(REPAIRABLE_PREFIXES):
             out["repairable"].append(v)

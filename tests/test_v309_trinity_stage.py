@@ -27,7 +27,7 @@ def record(role, cli, mission_id, run_id, stage, duration=10.0, exit_code=0):
 def test_stage_files_are_served_with_the_strict_csp(http_server):
     for path, marker in (("/", "trinity-canvas"), ("/stage.js", "TrinityStage"), ("/trinity.js", "window.Trinity"),
                          ("/stage.css", ".trinity")):
-        code, body = request(http_server, "GET", path)
+        code, body = request(http_server, "GET", path, headers={"Cookie": "director_session=test-token"})   # v3.2.0 session
         assert code == 200 and marker.encode() in body, path
     import http.client
     conn = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=3)

@@ -51,17 +51,19 @@ frame.addEventListener('load',setup);if(frame.contentDocument?.readyState==='com
 async function setupRoles(){
  const domains={OPENAI:'openai',GOOGLE:'antigravity',ANTHROPIC:'claude'};
  const order=['head','builder','reviewer'],names={head:'HEAD · 작업 지휘',builder:'BUILDER · 코드 작성',reviewer:'REVIEWER · 검수'};
- let roles,csrf,saving=false;
+ let roles,csrf,saving=false,pair=false;   // pair: Antigravity off, two AIs hold the three roles
  const notice=el('p','역할 불러오는 중…','role-notice');notice.setAttribute('aria-live','polite');doc.getElementById('corestrip').after(notice);
  const buttons={};
- function paint(){for(const [domain,provider] of Object.entries(domains)){const role=order.find(r=>roles[r]===provider);buttons[domain].textContent='다음: '+names[role]+' ↻';buttons[domain].disabled=saving;buttons[domain].setAttribute('aria-label',domain+' 역할 변경. 현재 예약 '+names[role]);}}
+ function paint(){for(const [domain,provider] of Object.entries(domains)){const b=buttons[domain];if(pair&&provider==='antigravity'){b.hidden=true;continue;}const held=order.filter(r=>roles[r]===provider).map(r=>names[r]).join(' + ')||'역할 없음';b.hidden=false;b.textContent='다음: '+held+' ↻';b.disabled=saving;b.setAttribute('aria-label',domain+' 역할 변경. 현재 예약 '+held);}}
  for(const [domain,provider] of Object.entries(domains)){
   const button=el('button','역할 연결 중…','role-cycle');button.type='button';button.disabled=true;buttons[domain]=button;doc.getElementById('node-'+domain)?.append(button);
-  button.onclick=async()=>{if(saving||!roles)return;saving=true;paint();const next={...roles},current=order.find(r=>roles[r]===provider),target=order[(order.indexOf(current)+1)%3];next[current]=roles[target];next[target]=provider;
+  button.onclick=async()=>{if(saving||!roles)return;saving=true;paint();let next={...roles};
+   if(pair){const other=provider==='openai'?'claude':'openai';next={};for(const r of order)next[r]=roles[r]===provider?other:provider;}   // swap the two AIs' roles
+   else{const current=order.find(r=>roles[r]===provider),target=order[(order.indexOf(current)+1)%3];next[current]=roles[target];next[target]=provider;}
    try{const response=await fetch('/ops/roles',{method:'POST',headers:{'Content-Type':'application/json','X-Solomon-Bridge':csrf},body:JSON.stringify(next)});const result=await response.json();if(!response.ok)throw Error(result.error||'저장 실패');roles=result.roles;notice.textContent=result.message;}
    catch(error){notice.textContent='역할 변경 실패 · '+error.message;}finally{saving=false;paint();}};
  }
- try{const response=await fetch('/ops/roles',{cache:'no-store'});if(!response.ok)throw Error('설정 조회 실패');const result=await response.json();roles=result.roles;csrf=result.csrf;paint();notice.textContent='버튼을 누르면 역할이 순환하고 상대 AI와 교환됩니다. 다음 대화/작업부터 적용 · 현재 실행과 TRIAD 연구 배정은 유지';}catch(error){notice.textContent=error.message;}
+ try{const response=await fetch('/ops/roles',{cache:'no-store'});if(!response.ok)throw Error('설정 조회 실패');const result=await response.json();roles=result.roles;csrf=result.csrf;pair=result.antigravity===false;paint();notice.textContent=(pair?'Antigravity 꺼짐 · 버튼을 누르면 두 AI의 역할을 맞바꿉니다.':'버튼을 누르면 역할이 순환하고 상대 AI와 교환됩니다.')+' 다음 대화/작업부터 적용 · 현재 실행과 TRIAD 연구 배정은 유지';}catch(error){notice.textContent=error.message;}
 }
 
 // ---------------------------------------------------------------- AI work visibility (missions, who works now, workload)

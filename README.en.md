@@ -2,9 +2,9 @@
 
 [한국어](README.md) · [English](README.en.md)
 
-A local development director that runs three logged-in AI coding CLIs (Claude Code, OpenAI Codex, Google Antigravity) as HEAD, BUILDER and REVIEWER, and turns a one-line goal into code that has been tested and independently reviewed. It never uses metered APIs.
+A local development director that runs logged-in AI coding CLIs (Claude Code, OpenAI Codex, optionally Google Antigravity) as HEAD, BUILDER and REVIEWER, and turns a one-line goal into code that has been tested and independently reviewed. It never uses metered APIs.
 
-This repository is a fork of [ai-dev-director by DAVZD](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8, changed to work on macOS. The original is Windows-first. This fork adds a native macOS app and hardens how results are applied, how missions are judged and how repositories are handled.
+This repository is a fork of [ai-dev-director by DAVZD](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8, changed to work on macOS, with the safety fixes of upstream v3.2.0 (2026-11-21) taken in. The original is Windows-first. This fork adds a native macOS app and hardens how results are applied, how missions are judged and how repositories are handled.
 
 - **Status:** used daily on macOS. All 751 tests pass on macOS (2026-11-15; one test that pretends to be Windows is skipped).
 - **Not verified:** the changes in this fork have not been run on Windows or Linux. The complete TRIAD flow using all three live CLIs is also unverified.
@@ -20,18 +20,19 @@ goal ─▶ HEAD (writes an ORDER) ─▶ BUILDER (proposes file changes as JSON
        HEAD decision ◀── REVIEWER ◀── verification (build and tests in an isolated worktree)
 ```
 
-- **Roles:** by default HEAD is Claude Code, BUILDER is Antigravity and REVIEWER is Codex. When one CLI hits its quota or fails, another takes over. Two CLIs are enough.
+- **Roles:** by default HEAD and BUILDER are Codex and REVIEWER is Claude Code, so the reviewer is a different AI from the one that planned and built. With Antigravity off, two CLIs share the three roles; only BUILDER and REVIEWER must differ. When one CLI hits its quota or fails, another takes over.
 - **Missions:** one chat line becomes a mission. HEAD plans one milestone at a time and plans the next one from the test and review results of the last.
 - **TRIAD research:** In Workshop → TRIAD Research, enter a topic, select at least two AIs, and choose **Start research**. The selected CLIs propose and critique independently. Codex synthesizes the hypothesis when selected, otherwise Claude Code does. The session runs in a temporary workspace and ends after synthesis. **Stop work** cancels it.
 - **Isolation:** every change is made in a git worktree under `.director_worktrees/` inside the project. The project itself changes only in the apply step after the mission ends.
-- **Apply:** a result that passed is applied to the project automatically, depending on settings. The tests are run again in the project after applying, and the change is rolled back if they fail. Nothing is committed.
+- **Apply:** by default you look at the result and press **반영** (Apply) yourself (`autonomy.auto_apply: "off"`); `on_pass` or `on_done` applies a passed result automatically. The tests are run again in the project after applying, and the change is rolled back if they fail. Nothing is committed.
 
 ## Requirements
 
 - macOS 13 or later
 - Python 3.9 or later, Git
 - Xcode (Swift 5.9 or later) to build the app
-- At least two logged-in CLIs: `claude` (Claude Code 2.1.259 or later), `codex`, `agy`. Their subscription login sessions are used as they are. No API key is needed, and any key in the environment is removed before a CLI is called.
+- At least two logged-in CLIs: `claude` (Claude Code 2.1.259 or later), `codex`, `agy`. Their subscription login sessions are used as they are. No API key is needed, and any key in the environment is removed before a CLI is called. **A CLI that was itself logged in with an API key still bills that key.**
+- **Antigravity (`agy`) caveat:** Google's Antigravity FAQ says wrapping `agy` inside another application is not supported on consumer plans, and account suspensions have been reported. So, like upstream v3.2.0, **it is off by default.** To use it at your own risk, put `antigravity: {enabled: true}` in `config.local.yaml`; then roles can go to Antigravity and three-AI TRIAD research works. A saved role choice that names Antigravity while it is off is ignored in favour of the roles in `config.yaml`.
 
 ## Install and run
 
@@ -51,7 +52,7 @@ The app starts the server and shows the console in its window. The build records
 Without the app, start the server and open it in a browser.
 
 ```bash
-./start-companion.sh    # http://127.0.0.1:8081 (stage view), /classic (workshop view)
+./start-companion.sh    # prints the login link (http://127.0.0.1:8081/?token=...); open it once per browser
 ./stop-companion.sh
 ```
 
@@ -91,10 +92,13 @@ When there is a result that passed, the line before it reads **"미션 전체 �
 
 | Rule | Behavior |
 | --- | --- |
-| No metered APIs | Every `*_API_KEY` is removed from the environment before a CLI is called. |
+| No metered APIs (environment only) | Every `*_API_KEY`, auth token and endpoint or cloud-billing switch (`ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, ...) is removed before a CLI or verification command runs. A CLI logged in with an API key is not covered. |
 | Project isolation | Building and editing happen only in worktrees under `.director_worktrees/`. |
 | Read-only roles | HEAD and the reviewer cannot write files or run commands. Codex runs in its read-only sandbox; Claude Code is started with the read tools only (Read, Grep, Glob), without the tools of connected apps and without the settings files of the project being worked on. |
 | Scope limits | The Director checks the allowed paths, protected paths, file count and changed-line count written in the ORDER. The BUILDER cannot relax them. |
+| Size and configuration caps hold | Exceeding the file-count or changed-line cap stops the step and the mission re-plans a smaller one; a dependency, build or permission configuration change waits for you. HEAD proxy waives them only with `autonomy.waive_scope_caps: true`. |
+| Documents outside the project | An absolute document path in an ORDER reaches the BUILDER only inside the project or a folder under `safety.reference_roots`. |
+| Console needs a session | Every state-changing request needs the local-origin check plus the session from the login link or the bridge token; the token is not handed to unauthenticated callers. The macOS app connects on its own. |
 | A failed review is a failure | A missing or broken review reply counts as a failure, not a pass. |
 | Only what was reviewed is applied | The file contents at the moment of the pass are recorded and compared with the worktree right before applying. A worktree changed after review is not applied. |
 | Your edits win | If the AI and you changed the same file, apply is blocked as a conflict. A file you deleted is not brought back, and deletions are never applied. |
@@ -217,6 +221,9 @@ Unit tests do not run the real CLIs and do not touch the working database. Integ
 
 ## Known limits
 
+- **Not a sandbox.** AI-written tests and build commands run with your own user rights; a git worktree only keeps file changes apart from the original.
+- **"Subscription only" is declared, not measured.** `api_key_used: false` means the Director removed the keys from the environment, not that it saw how the CLI billed.
+- **Other programs of the same user are not stopped.** They can read `data/solomon-bridge.token`; the session and token stop processes that can only reach the port, and other web pages.
 - Even large changes are submitted by the BUILDER as file contents in JSON, so they can hit a CLI's output limit.
 - It is bound by each CLI's subscription quota. When a quota runs out, another CLI takes over.
 - When the reviewer and HEAD end up on the same CLI, the run continues with a `REDUCED_INDEPENDENCE` mark.

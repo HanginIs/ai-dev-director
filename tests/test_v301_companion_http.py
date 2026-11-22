@@ -49,7 +49,8 @@ def test_read_bridge_requires_token(http_server):
 
 
 def test_console_static_served(http_server):
-    code, body = request(http_server, 'GET', '/')
+    assert request(http_server, 'GET', '/')[0] == 403        # v3.2.0: the console needs a session
+    code, body = request(http_server, 'GET', '/', headers={'Cookie': 'director_session=test-token'})
     assert code == 200 and 'AI DEV 작업실'.encode() in body
     assert request(http_server, 'GET', '/console.js')[0] == 200
 
@@ -57,7 +58,8 @@ def test_console_static_served(http_server):
 def test_classic_view_offers_a_way_back_to_the_stage(http_server):
     import dashboard_server
     dashboard_server._ensure_schema()                       # the isolated test database starts empty
-    code, body = request(http_server, 'GET', '/classic')
+    assert request(http_server, 'GET', '/classic')[0] == 403          # v3.2.0: the console needs a session
+    code, body = request(http_server, 'GET', '/classic', headers={'Cookie': 'director_session=test-token'})
     text = body.decode('utf-8')
     assert code == 200 and 'id="main"' in text            # still the original dashboard the workshop embeds
     assert 'id="back-to-stage" href="/"' in text           # full-window view links back to the stage

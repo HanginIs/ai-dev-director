@@ -44,8 +44,8 @@ async function getJSON(url){const r=await fetch(url,{cache:'no-store'});if(!r.ok
 
 // ------------------------------------------------------------------ model
 const CLI={claude:'ANTHROPIC',antigravity:'GOOGLE',openai:'OPENAI'},CLI_OF={ANTHROPIC:'claude',GOOGLE:'antigravity',OPENAI:'openai'};
-let roleSettings=null,roleToken=null;                 // what the NEXT task will use (data/role_settings.json via /ops/roles)
-async function pollRoles(){try{const r=await getJSON('/ops/roles');roleSettings=r.roles;roleToken=r.csrf;repaint();}catch(e){/* keep the last known roles */}}
+let roleSettings=null,roleToken=null,rolePair=false;   // rolePair: Antigravity off, two AIs hold the three roles                 // what the NEXT task will use (data/role_settings.json via /ops/roles)
+async function pollRoles(){try{const r=await getJSON('/ops/roles');roleSettings=r.roles;roleToken=r.csrf;rolePair=r.antigravity===false;repaint();}catch(e){/* keep the last known roles */}}
 function assignment(){
   if(roleSettings&&!isLiveNow())return {HEAD:CLI[roleSettings.head],BUILDER:CLI[roleSettings.builder],REVIEWER:CLI[roleSettings.reviewer]};
   const a={...DEFAULT_ASSIGN},prov=(status&&status.providers)||{};
@@ -60,11 +60,14 @@ function openRoleMenu(label){
   menu.dataset.slot=String(slot);menu.replaceChildren(el('p',ROLE_KO[role]+' 를 맡을 AI'+(isLiveNow()?' · 진행 중인 작업은 그대로, 다음 작업부터 적용':'')));
   const key=role.toLowerCase();
   for(const p of ['ANTHROPIC','GOOGLE','OPENAI']){
+    if(rolePair&&p==='GOOGLE')continue;
     const b=el('button',AI[p].name),cur=roleSettings[key]===CLI_OF[p],other=ROLES.find(r=>roleSettings[r.toLowerCase()]===CLI_OF[p]);
     b.type='button';b.setAttribute('role','menuitem');b.style.setProperty('--c',AI[p].css);b.classList.toggle('on',cur);
-    b.append(el('small',cur?'현재':'지금 '+other+' → 서로 교체'));
+    b.append(el('small',cur?'현재':rolePair?'이 역할로 선택':'지금 '+other+' → 서로 교체'));
     b.onclick=async()=>{if(cur){menu.hidden=true;return;}
-      const next={...roleSettings};next[other.toLowerCase()]=roleSettings[key];next[key]=CLI_OF[p];
+      const next={...roleSettings};
+      if(rolePair){next[key]=CLI_OF[p];if(next.builder===next.reviewer)next[key==='builder'?'reviewer':'builder']=roleSettings[key];}   // BUILDER and REVIEWER stay different
+      else{next[other.toLowerCase()]=roleSettings[key];next[key]=CLI_OF[p];}
       for(const x of menu.querySelectorAll('button'))x.disabled=true;
       try{const res=await fetch('/ops/roles',{method:'POST',headers:{'Content-Type':'application/json','X-Solomon-Bridge':roleToken},body:JSON.stringify(next)}),out=await res.json();
         if(!res.ok)throw Error(out.error||'저장 실패');roleSettings=out.roles;notice('역할을 바꿨습니다 · '+ROLE_KO[role]+' = '+AI[p].name+' (다음 작업부터 적용)');}

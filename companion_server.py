@@ -20,6 +20,40 @@ STATIC_FILES = {'/': 'index.html', '/console.js': 'console.js', '/console.css': 
 
 _PICK_LOCK = threading.Lock()
 
+# Browser session (2026-11-20, public review: any local program could POST /chat, /run/approve, /result/apply because
+# only Host/Origin were checked, and the token was handed to whoever asked /ops/state). The console is now unlocked
+# once per browser through the login link the launcher prints; the token is no longer served to unauthenticated
+# callers. A program running as the same OS user can still read data/solomon-bridge.token - that is the limit of
+# any local tool - but a process that can only reach the port cannot drive the Director any more.
+SESSION_COOKIE = 'director_session'
+LOCK_PAGE = ('<!doctype html><meta charset="utf-8"><title>AI DEV DIRECTOR</title>'
+             '<body style="font:16px/1.7 system-ui,sans-serif;max-width:560px;margin:14vh auto;padding:0 20px;color:#222">'
+             '<h1 style="font-size:20px">이 브라우저는 아직 연결되지 않았습니다</h1>'
+             '<p>start-companion 을 실행하면 터미널에 연결 주소가 나옵니다. 그 주소로 한 번 접속하면 '
+             '이 브라우저는 계속 열립니다.</p>'
+             '<p style="color:#666">Run start-companion and open the login link it prints (once per browser).</p></body>')
+
+
+def token_file() -> Path:
+    path = ROOT / 'data' / 'solomon-bridge.token'
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(secrets.token_urlsafe(48), encoding='utf-8')
+    try:
+        os.chmod(path, 0o600)              # the token authorizes state changes; only this user reads it
+    except OSError:
+        pass
+    return path
+
+
+def login_url() -> str:
+    port = json.loads((ROOT / 'companion.json').read_text(encoding='utf-8')).get('port', 8081)
+    return 'http://127.0.0.1:' + str(port) + '/?token=' + token_file().read_text(encoding='utf-8').strip()
+
+
+def _same(a: str, b: str) -> bool:
+    return secrets.compare_digest(str(a).encode('utf-8'), str(b).encode('utf-8'))
+
 
 def pick_folder(initial: str = "", timeout: int = 300) -> dict:
     """Open the native folder dialog on this PC's desktop and return {'path': str} ('' when cancelled). One at a time."""
@@ -121,9 +155,21 @@ class CompanionHandler(d.DashboardHandler):
             unread = 0
         if 0 < unread <= 65536:
             self.rfile.read(unread)
+        if path == '/' and 'token' in parse_qs(urlsplit(self.path).query):
+            if not _same(parse_qs(urlsplit(self.path).query)['token'][0], self.server.bridge_token):
+                return self._send_lock()
+            self.send_response(303)
+            self.send_header('Location', '/')       # drops the token from the address bar
+            self.send_header('Set-Cookie', SESSION_COOKIE + '=' + self.server.bridge_token + '; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Length', '0')
+            self.end_headers(); return
+        if path in ('/', '/classic') and not self.authorized():
+            return self._send_lock()
         if path == '/ops/roles':
-            from core.role_settings import current
-            return self._send_json({'roles': current(d.load_config()), 'csrf': self.server.bridge_token})
+            from core.role_settings import current, three_ai
+            return self._send_json({'roles': current(d.load_config()), 'antigravity': three_ai(),
+                                    'csrf': self.server.bridge_token if self.authorized() else None})
         if path in STATIC_FILES:
             name = STATIC_FILES[path]
             body = (ROOT / 'console' / name).read_bytes()
@@ -147,7 +193,7 @@ class CompanionHandler(d.DashboardHandler):
             return
         elif path == '/ops/state':
             report = ROOT / 'data' / 'cli_diagnostics.json'
-            return self._send_json({'csrf': self.server.bridge_token,
+            return self._send_json({'csrf': self.server.bridge_token if self.authorized() else None,
                 'orders': self.server.bridge.list(), 'allowed_projects': sorted(self.server.bridge.allowed),
                 'diagnostics': json.loads(report.read_text(encoding='utf-8')) if report.exists() else None,
                 'status': d.cached_status_payload(), 'solomon_url': 'http://127.0.0.1:8710'})
@@ -180,7 +226,23 @@ class CompanionHandler(d.DashboardHandler):
         return super().do_GET()
 
     def authorized(self):
-        return secrets.compare_digest(self.headers.get('X-Solomon-Bridge', ''), self.server.bridge_token)
+        """The bridge header (Solomon, scripts that can read the token file) or this browser's session cookie."""
+        if _same(self.headers.get('X-Solomon-Bridge', ''), self.server.bridge_token):
+            return True
+        from http.cookies import SimpleCookie, CookieError
+        try:
+            jar = SimpleCookie(self.headers.get('Cookie', ''))
+        except CookieError:
+            return False
+        return SESSION_COOKIE in jar and _same(jar[SESSION_COOKIE].value, self.server.bridge_token)
+
+    def _send_lock(self):
+        body = LOCK_PAGE.encode('utf-8')
+        self.send_response(403)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers(); self.wfile.write(body)
 
     def do_POST(self):
         if self.path == '/ops/roles':
@@ -297,6 +359,16 @@ class CompanionHandler(d.DashboardHandler):
                 return self._send_json({'error': str(exc)}, 400)
             except Exception as exc:
                 return self._send_json({'error': str(exc)[:500]}, 500)
+        # Everything inherited from the dashboard (chat, project, run approve/reject, mission decide, result
+        # apply/discard, provider refresh) changes state: it needs the session too, not just a local Host header.
+        if not d.is_request_origin_allowed(self.headers, self.server.server_address[1])[0] or not self.authorized():
+            try:
+                unread = int(self.headers.get('Content-Length') or 0)
+            except ValueError:
+                unread = 0
+            if 0 < unread <= 65536:
+                self.rfile.read(unread)
+            return self._send_json({'error': '연결되지 않은 요청입니다. start-companion 이 알려 주는 연결 주소로 먼저 접속해 주세요.'}, 403)
         return super().do_POST()
 
 
@@ -304,14 +376,7 @@ def run():
     config = json.loads((ROOT / 'companion.json').read_text(encoding='utf-8'))
     d._ensure_schema()
     server = d.DashboardServer(('127.0.0.1', config.get('port', 8081)), CompanionHandler)
-    token_path = ROOT / 'data' / 'solomon-bridge.token'
-    if not token_path.exists():
-        token_path.write_text(secrets.token_urlsafe(48), encoding='utf-8')
-    try:
-        os.chmod(token_path, 0o600)        # the token authorizes state changes; only this user reads it
-    except OSError:
-        pass
-    server.bridge_token = token_path.read_text(encoding='utf-8').strip()
+    server.bridge_token = token_file().read_text(encoding='utf-8').strip()
     server.bridge = SolomonBridge(d, config.get('allowed_projects', []))
     try:                                   # runs a quit app left open: close them before anything resumes
         from core.mission import finalize_orphaned_runs
@@ -333,4 +398,7 @@ def run():
 
 
 if __name__ == '__main__':
+    if '--login-url' in sys.argv[1:]:
+        print(login_url())
+        sys.exit(0)
     run()
