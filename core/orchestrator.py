@@ -11,6 +11,7 @@ from core.state_machine import StateMachine, State, TERMINAL_STATES
 from core.git_manager import GitManager
 from core.safety import SafetyPolicy, ScopeViolationError
 from core.verifier import Verifier, verification_timeout
+from core.verification_feedback import verification_feedback
 from core.provider_manager import ProviderManager, ProviderStatus, FailoverMode, ErrorCategory
 from core import autopilot
 from agents.head import BaseHead
@@ -1268,7 +1269,7 @@ class Orchestrator:
                 repair_order = {'round': len(rounds), 'head': decision.model_dump(),
                                 'review': review_result.model_dump(),
                                 'test_summary': verification.get('summary'),
-                                'test_output': (verification.get('test', {}).get('output') or '')[-12000:]}
+                                'verification': verification_feedback(verification)}
                 marker = '\nHEAD REPAIR ORDER: '
                 order.context = (order.context or '').split(marker, 1)[0] + marker + json.dumps(repair_order, ensure_ascii=False)
                 self._save_json(run_id, 'order.json', order)

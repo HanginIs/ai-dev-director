@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional
 
 from core.env_utils import resolve_cli, get_sanitized_env
 from core.process_runner import ProcessTreeRunner
+from core.verification_feedback import verification_feedback
 from schemas.order import OrderSchema
 from schemas.review_result import ReviewResultSchema
 from schemas.provenance import AgentProvenanceRecord
@@ -144,7 +145,7 @@ class CodexReviewer:
             f"VERIFICATION PASSED: {verification.get('passed')}\n"
             f"VERIFICATION SUMMARY: {verification.get('summary')}\n"
             f"TEST COUNTS (Director's own run): {json.dumps(verification.get('test_counts'))}\n"
-            f"TEST OUTPUT TAIL: {((verification.get('test') or {}).get('output') or '')[-1500:]}\n\n"
+            f"BUILD/TEST/LINT EVIDENCE: {json.dumps(verification_feedback(verification), ensure_ascii=False)}\n\n"
             f"{decisions}GIT DIFF:\n```diff\n{git_diff}\n```\n\n"
             "FORMATTING MANDATE:\n"
             "Your output MUST contain a JSON code block formatted as:\n"

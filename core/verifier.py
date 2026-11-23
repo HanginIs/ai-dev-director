@@ -76,16 +76,19 @@ class Verifier:
                     no_output_timeout=None
                 )
 
+            combined_output = (res.stdout or "") + ("\n" + res.stderr if res.stderr else "")
             if res.timed_out:
                 return {
                     "command": cmd_str if isinstance(cmd_str, str) else " ".join(cmd_str),
                     "executed": True,
                     "passed": False,
                     "exit_code": -1,
-                    "output": f"Command timed out after {timeout} seconds: {res.timeout_reason}"
+                    "timed_out": True,
+                    "timeout_reason": res.timeout_reason,
+                    "output": (f"Command timed out after {timeout} seconds: {res.timeout_reason}\n"
+                               + combined_output).strip()
                 }
 
-            combined_output = (res.stdout or "") + ("\n" + res.stderr if res.stderr else "")
             passed = (res.exit_code == 0)
             return {
                 "command": cmd_str if isinstance(cmd_str, str) else " ".join(cmd_str),

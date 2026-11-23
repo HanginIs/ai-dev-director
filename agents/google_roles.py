@@ -5,6 +5,7 @@ from agents.claude_head import ClaudeHead
 from core import project_history
 from core.bootstrap import prepare_project
 from core.env_utils import resolve_cli
+from core.verification_feedback import verification_feedback
 from core.research_runner import TriadResearchRunner
 from schemas.review_result import ReviewResultSchema
 
@@ -42,5 +43,8 @@ class GoogleReviewer(GoogleHead):
                   'Return only JSON: {"verdict":"pass or changes_required","p0":[],"p1":[],"p2":[],"summary":"..."}.\n'
                   + project_history.review_block((project_context or {}).get('decision_history'))
                   + json.dumps({'order':order.model_dump(), 'diff':git_diff,
-                                'verification':{k:v for k,v in verification.items() if k != 'git_diff'}}, ensure_ascii=False))
+                                'verification': {
+                                    **{k:v for k,v in verification.items()
+                                       if k not in ('git_diff', 'build', 'test', 'lint')},
+                                    **verification_feedback(verification)}}, ensure_ascii=False))
         return ReviewResultSchema(**self._extract_json(self._invoke_cli(prompt)))

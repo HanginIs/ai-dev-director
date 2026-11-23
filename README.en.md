@@ -6,7 +6,7 @@ A local development director that runs logged-in AI coding CLIs (Claude Code, Op
 
 This repository is a fork of [ai-dev-director by DAVZD](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8, changed to work on macOS, with the safety fixes of upstream v3.2.0 (2026-11-21) taken in. The original is Windows-first. This fork adds a native macOS app and hardens how results are applied, how missions are judged and how repositories are handled.
 
-- **Status:** used daily on macOS. After the DB, verification-cache and quota-pause fixes on 2026-11-23, all 832 default regression cases passed, with one Windows-only skip. Two opt-in real-AI/live-dashboard cases were excluded.
+- **Status:** used daily on macOS. After the DB, verification-cache, quota-pause and diagnostic-feedback fixes on 2026-11-23, all 859 default regression cases passed, with one Windows-only skip. Two opt-in real-AI/live-dashboard cases were excluded.
 - **Not verified:** the changes in this fork have not been run on Windows or Linux. The complete TRIAD flow using all three live CLIs is also unverified.
 
 The console and all mission messages are in Korean.
@@ -148,6 +148,15 @@ and user caches are not deleted; only Director's temporary cache is removed afte
 the command finishes. Cold imports may cost more time, but verification commands,
 failure criteria and login settings are unchanged.
 
+Compiler and lint failures now reach HEAD, the independent reviewer and the next
+correction round alongside test failures. Each command includes its execution
+status, exit code and a diagnostic-first excerpt of up to 4,000 characters
+(12,000 across build/test/lint). Long logs retain beginning/end and selected error
+contexts, with truncation marked. Output produced before a timeout is retained
+in the full verification artifact too. Excerpts are not exhaustive; the original
+artifact remains authoritative. Logs are evidence, not instructions. No review,
+safety gate or correction-budget check is bypassed by this feedback improvement.
+
 ## Configuration
 
 - **`config.yaml`:** CLI per role, timeouts, safety caps (`max_files_changed`, `max_diff_lines`), default verification commands, the change history file (`project_history`), autonomy mode and profiles.
@@ -244,6 +253,14 @@ Quota-pause follow-up: all 25 new tests and the 64-case related stop/usage group
 passed; the full default suite then passed **832 cases with one skip**. Sixteen
 concurrent accesses to an old ledger schema also preserved existing error rows
 without inventing retrospective failure categories.
+
+Compiler/lint feedback follow-up: **27 new tests passed**, followed by **859 passed,
+one skip and two opt-in exclusions** in the full default suite. Real compiler and
+lint subprocess failures reached correction rounds, followed by verification,
+independent review and final judgment again. A zero correction budget still ends
+in failure without another build. A before/after prompt comparison reproduced
+the omitted build diagnostic and confirmed its delivery after the fix. No real
+paid AI calls were made.
 
 ## What changed from the original
 

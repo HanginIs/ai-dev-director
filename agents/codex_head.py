@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional
 from agents.head import BaseHead
 from core.env_utils import resolve_cli, get_sanitized_env
 from core.process_runner import ProcessTreeRunner
+from core.verification_feedback import verification_feedback
 from schemas.order import OrderSchema
 from schemas.builder_result import BuilderResultSchema
 from schemas.review_result import ReviewResultSchema
@@ -198,18 +199,10 @@ class CodexHead(BaseHead):
         cwd: Optional[str] = None,
         **kwargs
     ) -> DecisionSchema:
-        test_info = verification.get("test", {})
         evidence = {
             "order": order.model_dump(),
             "builder_result": builder_result.model_dump(),
-            "verification": {
-                "passed": verification.get("passed"),
-                "summary": verification.get("summary"),
-                "test_command": test_info.get("command"),
-                "test_exit_code": test_info.get("exit_code"),
-                "test_counts": verification.get("test_counts"),
-                "test_output": (test_info.get("output") or "")[:800],
-            },
+            "verification": verification_feedback(verification),
             "git_diff": verification.get("git_diff") or "",
             "review": review_result.model_dump()
         }
