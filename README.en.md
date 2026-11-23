@@ -6,7 +6,7 @@ A local development director that runs logged-in AI coding CLIs (Claude Code, Op
 
 This repository is a fork of [ai-dev-director by DAVZD](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8, changed to work on macOS, with the safety fixes of upstream v3.2.0 (2026-11-21) taken in. The original is Windows-first. This fork adds a native macOS app and hardens how results are applied, how missions are judged and how repositories are handled.
 
-- **Status:** used daily on macOS. After the verification-cache fix on 2026-11-23, all 807 default regression cases passed, with one Windows-only skip. Two opt-in real-AI/live-dashboard cases were excluded.
+- **Status:** used daily on macOS. After the DB, verification-cache and quota-pause fixes on 2026-11-23, all 832 default regression cases passed, with one Windows-only skip. Two opt-in real-AI/live-dashboard cases were excluded.
 - **Not verified:** the changes in this fork have not been run on Windows or Linux. The complete TRIAD flow using all three live CLIs is also unverified.
 
 The console and all mission messages are in Korean.
@@ -89,6 +89,20 @@ The last line reports the apply step.
 When there is a result that passed, the line before it reads **"미션 전체 변경: N개 파일 (새 파일 M개), +A줄 / -B줄"** (total change of the mission: N files, M of them new, A lines added, B removed). It is the sum over all milestones, and a note asks you to check the changes yourself when it exceeds the cap for one milestone. It is reported only and never blocks.
 
 ## Rules it enforces
+
+**Usage-limit pauses:** an explicit recorded CLI quota failure is distinguished
+from code failures, login errors and approval gates. It pauses the mission without
+automatic resume or apply. After the limit resets, **Continue** runs the same ORDER
+at the same milestone index in a fresh run, from the last passed baseline. Old run
+IDs and unreviewed worktrees remain available; unreviewed work does not become a
+trusted baseline. Verification, independent review and security gates still apply.
+Existing errors are not retrospectively classified. The work ledger adds only a
+failure category, never raw error text or credentials.
+
+The fresh-run resume approach was inspired by
+[eunsebi's fix](https://github.com/eunsebi/ai-dev-director/commit/4f5d3d1395e091dcd59d5d64cac331cbc7a18da3).
+This adaptation also prioritizes security gates, uses run-specific error evidence,
+preserves unreviewed worktrees and blocks auto-apply during quota waits.
 
 | Rule | Behavior |
 | --- | --- |
@@ -225,6 +239,11 @@ tests, the 85-case related group and the full default suite passed: **807 passed
 one Windows-only skip**. Both new stale-cache reproductions fail with the previous
 verifier by reading the old source value. The two opt-in real-AI/live-dashboard
 cases were excluded according to the normal test configuration.
+
+Quota-pause follow-up: all 25 new tests and the 64-case related stop/usage group
+passed; the full default suite then passed **832 cases with one skip**. Sixteen
+concurrent accesses to an old ledger schema also preserved existing error rows
+without inventing retrospective failure categories.
 
 ## What changed from the original
 

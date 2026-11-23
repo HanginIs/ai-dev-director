@@ -808,6 +808,9 @@ def mission_view(m: dict, sm: Optional[StateMachine] = None) -> dict:
                 "note": (res.get("stop_detail") or "")[:220] if state not in ("PASS", None) else ""}
     applied = m.get("applied") or None
     return {"mission_id": m["mission_id"], "goal": m.get("goal", "")[:400], "status": m.get("status"),
+            "usage_limit_paused": (m.get("status") == "BLOCKED"
+                                   and str(m.get("blocked_reason") or "").startswith("USAGE_LIMIT:")
+                                   and bool((m.get("steps") or [{}])[-1].get("limit_paused"))),
             "live": m.get("status") == "RUNNING" and _pid_alive(m.get("owner_pid")),
             "project": Path(m.get("project_path", "")).name, "project_path": m.get("project_path"),
             "max_steps": m.get("max_steps"), "profile": m.get("profile", "standard"), "source": m.get("source", "chat"),

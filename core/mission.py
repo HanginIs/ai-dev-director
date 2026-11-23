@@ -9,6 +9,7 @@ final worktree. Missions are persisted so a restart continues where it stopped.
 """
 import json
 import os
+import sqlite3
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -271,6 +272,15 @@ class MissionRunner:
         knobs = autopilot.profile_overrides(orch.config, mission.get("profile"))
         if knobs:                                              # the profile's budgets apply to every run of this mission
             orch.config.setdefault("autonomy", {}).update({k: v for k, v in knobs.items() if k != "max_steps"})
+        if step.get("limit_paused") and mission.get("status") == "RUNNING":
+            # Only a manual reopen makes a BLOCKED mission RUNNING. Keep the old
+            # run/evidence, but don't re-read its terminal result indefinitely.
+            step.setdefault("limit_retries", []).append(step.get("run_id"))
+            prior_worktree = (step.get("result") or {}).get("worktree_path")
+            if prior_worktree:
+                step.setdefault("limit_retry_worktrees", []).append(prior_worktree)
+            step["run_id"], step["result"], step["limit_paused"] = None, None, False
+            self.store.save(mission)
         row = orch.sm.get_run(step["run_id"]) if step.get("run_id") else None
         # a recorded result goes stale when the run moved on afterwards (e.g. the user approved a blocked step)
         stale = step.get("result") is not None and row is not None and row["current_state"] != step["result"].get("final_state")
@@ -290,7 +300,16 @@ class MissionRunner:
         if self._stop_reason(mission["mission_id"]):
             return self.store.load(mission["mission_id"])      # stopped: no planning, no next step
         result = step["result"]
+        limit = self._usage_limit_stop(result, orch, step.get("limit_provider"))
+        if limit:
+            step["limit_paused"], step["limit_provider"] = True, limit
+            self.store.save(mission)
+            return self._finish(mission, "BLOCKED", blocked=(
+                f"USAGE_LIMIT: {limit} · 한도 중단 후 복구 확인이 필요합니다. "
+                "한도가 풀리면 ‘이어서 진행’을 누르세요. 자동으로 재개하지 않습니다. "
+                "미검수 작업본은 보존하며 마지막 통과 상태에서 같은 단계를 다시 실행합니다."))
         if result["final_state"] == State.PASS:
+            step.pop("limit_provider", None)
             mission["base_worktree"] = result.get("worktree_path") or mission.get("base_worktree")
         elif result["final_state"] not in (State.FAIL, State.TIMEOUT):
             # Only a delegated exception (money / credentials / irreversible) or a security stop waits for the user;
@@ -488,6 +507,35 @@ class MissionRunner:
         }
 
     @staticmethod
+    def _usage_limit_stop(result: Dict[str, Any], orch=None, prior_provider=None) -> Optional[str]:
+        """Only this run's explicit CLI failure can establish a new quota pause."""
+        if not result or result.get("final_state") == State.PASS:
+            return None
+        detail = result.get("stop_detail") or ""
+        if any(marker in detail for marker in autopilot.USER_STOP_MARKERS
+               if marker not in ("PROVIDER_FAILURE", "No usable provider")):
+            return None                                      # never override a money/security/user-decision gate
+        run_id = result.get("run_id")
+        if not run_id:
+            return None
+        from core import usage
+        try:
+            rows = usage._rows("run_id=? AND source='live'", (run_id,))
+        except (OSError, ValueError, sqlite3.Error):
+            return None
+        if rows:
+            last = rows[-1]
+            return last["provider"] if last["error_category"] == "QUOTA" else None
+        if prior_provider and (detail.startswith("PROVIDER_FAILURE") or detail.startswith("No usable provider")):
+            # A repeated manual resume may be gated before a CLI is called.
+            # Do not turn an already-known quota pause into a cached dead end.
+            from core.provider_manager import ProviderStatus
+            state = getattr(getattr(orch, "pm", None), "status_map", {}).get(prior_provider)
+            if state in (ProviderStatus.QUOTA_EXHAUSTED, ProviderStatus.RECOVERING):
+                return prior_provider
+        return None
+
+    @staticmethod
     def _one_line(result: Dict[str, Any]) -> str:
         tests = result.get("tests") or {}
         parts = []
@@ -516,6 +564,10 @@ class MissionRunner:
         where = mission.get("base_worktree") or "(아직 통과한 단계 없음)"
         head_line = {"DONE": "미션 완료", "BLOCKED": "미션 보류 - 사용자 결정 필요",
                      "INCOMPLETE": "미션 중단 - 단계 예산 소진 또는 계획 불가", "FAILED": "미션 실패"}[status]
+        quota_pause = (status == "BLOCKED" and str(blocked or "").startswith("USAGE_LIMIT:")
+                       and bool(mission["steps"][-1].get("limit_paused")))
+        if quota_pause:
+            head_line = "미션 일시정지 - AI 사용 한도"
         text = (f"{head_line} ({passed}/{len(mission['steps'])} 단계 통과)\n"
                 f"목표: {mission['goal'][:300]}\n{mission['summary'][:1500]}\n결과물 위치(작업본): {where}")
         if blocked:
@@ -525,7 +577,7 @@ class MissionRunner:
         # Measured before applying: afterwards the project and the result are the same and nothing differs.
         size_line = self._change_size_line(mission)
         # Apply first, so the one final message says whether the project now holds the result.
-        applied_line = self._auto_apply(mission)
+        applied_line = None if quota_pause else self._auto_apply(mission)
         if size_line:
             text += "\n" + size_line
         if applied_line:

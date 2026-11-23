@@ -106,7 +106,7 @@ function paintNow(a,focus){
 function paintMission(focus){
  const m=doc.getElementById('ai-mission'),opened=new Set([...m.querySelectorAll('details[open]>summary')].map(s=>s.textContent)),scroll=m.scrollTop;m.replaceChildren();
  if(!focus){m.append(el('strong','미션'),el('p','아직 미션 기록이 없습니다. 채팅으로 요청하면 여기에 단계별 진행이 표시됩니다.'));return;}
- const status=focus.status==='RUNNING'?(focus.live?'진행 중':'중단됨 · 재개 대기'):(MISSION_STATUS[focus.status]||focus.status);
+ const status=focus.usage_limit_paused?'사용 한도로 일시정지':focus.status==='RUNNING'?(focus.live?'진행 중':'중단됨 · 재개 대기'):(MISSION_STATUS[focus.status]||focus.status);
  const title=el('div','','ai-mission-title');title.append(el('strong','미션 · '+focus.project),el('span',status,'ai-badge '+(focus.status==='DONE'?'ok':focus.status==='RUNNING'&&focus.live?'run':'warn')));
  m.append(title,el('p',focus.goal,'ai-goal'));
  const bar=el('div','','ai-steps');
@@ -116,6 +116,7 @@ function paintMission(focus){
  for(const s of [...focus.steps].reverse()){const row=el('div','','ai-step '+(STEP_CLASS[s.state]||'run'));const t=s.tests?(' · 테스트 '+s.tests.passed+'/'+s.tests.total):'';row.append(el('strong',s.index+'단계 · '+(s.state_ko||s.state||'진행 중')+t+(s.review?' · 리뷰 '+s.review:'')+(s.repairs?' · 자동 수정 '+s.repairs+'회':'')+(s.builds_on_failed_attempt?' · 이전 시도 이어받음':'')),el('p',s.goal));if(s.note)row.append(el('small',s.note));list.append(row);}
  m.append(list);
  if(focus.summary){const sm=el('details');sm.append(el('summary','HEAD 요약'),el('p',focus.summary));m.append(sm);}
+ if(focus.usage_limit_paused){m.append(el('small','AI 사용 한도로 일시정지 · 한도가 풀리면 이어서 진행 · 자동 재개 안 함','ai-sub'));}
  if(focus.blocked_reason){m.append(el('small','멈춘 이유: '+focus.blocked_reason,'ai-sub'));}
  if(focus.deliverable)m.append(el('small','결과물 위치: '+focus.deliverable,'ai-sub path'));
  for(const d of m.querySelectorAll('details'))if(opened.has(d.querySelector('summary').textContent))d.open=true;m.scrollTop=scroll;

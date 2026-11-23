@@ -83,7 +83,15 @@ def _conn() -> sqlite3.Connection:
         provider TEXT NOT NULL, role TEXT, stage TEXT, run_id TEXT, mission_id TEXT, pid INTEGER,
         duration_sec REAL, prompt_chars INTEGER, output_chars INTEGER,
         tokens_in INTEGER, tokens_out INTEGER, tokens_total INTEGER, tokens_exact INTEGER DEFAULT 0,
-        exit_code INTEGER, source TEXT DEFAULT 'live')""")
+        exit_code INTEGER, source TEXT DEFAULT 'live', error_category TEXT)""")
+    if "error_category" not in {r[1] for r in conn.execute("PRAGMA table_info(ai_usage)")}:
+        try:
+            conn.execute("ALTER TABLE ai_usage ADD COLUMN error_category TEXT")
+        except sqlite3.OperationalError:
+            # Another writer may have added it after our schema read.
+            if "error_category" not in {r[1] for r in conn.execute("PRAGMA table_info(ai_usage)")}:
+                conn.close()
+                raise
     conn.execute("CREATE INDEX IF NOT EXISTS ai_usage_started ON ai_usage(started_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS ai_usage_mission ON ai_usage(mission_id)")
     return conn
@@ -135,19 +143,39 @@ def call_finished(row_id: Optional[int], argv: List[str], prompt: Optional[str],
         tin, tout, total, is_exact = est_in, est_out, est_in + est_out, 0
     exit_code = getattr(result, "exit_code", None)
     status = "TIMEOUT" if getattr(result, "timed_out", False) else ("OK" if exit_code == 0 else "ERROR")
+    error_category = None
+    # Some CLI versions report an explicit error envelope with exit code zero.
+    # A successful answer merely mentioning quota must never pause a mission.
+    explicit_error = ""
+    candidates = [stdout] + stdout.splitlines()
+    for candidate in candidates:
+        try:
+            event = json.loads(candidate)
+        except (TypeError, ValueError):
+            continue
+        if provider == "ANTHROPIC" and isinstance(event, dict) and event.get("type") == "result" and event.get("is_error") is True:
+            explicit_error = str(event.get("result") or event.get("error") or "")
+    if status == "TIMEOUT":
+        error_category = "TIMEOUT"
+    elif status == "ERROR" or explicit_error:
+        from core.provider_manager import ErrorCategory
+        error_category = ErrorCategory.classify(explicit_error or (stdout + "\n" + stderr)).value
+        status = "ERROR"
     with _conn() as conn:
         conn.execute(
             "UPDATE ai_usage SET ended_at=?, status=?, duration_sec=?, output_chars=?, tokens_in=?, tokens_out=?, "
-            "tokens_total=?, tokens_exact=?, exit_code=? WHERE id=?",
+            "tokens_total=?, tokens_exact=?, exit_code=?, error_category=? WHERE id=?",
             (datetime.utcnow().isoformat(), status, getattr(result, "duration_sec", None), len(stdout),
-             tin, tout, total, is_exact, exit_code, row_id))
+             tin, tout, total, is_exact, exit_code, error_category, row_id))
 
 
 def call_failed(row_id: Optional[int], error: BaseException) -> None:
     if row_id is None:
         return
+    from core.provider_manager import ErrorCategory
     with _conn() as conn:
-        conn.execute("UPDATE ai_usage SET ended_at=?, status='ERROR' WHERE id=?", (datetime.utcnow().isoformat(), row_id))
+        conn.execute("UPDATE ai_usage SET ended_at=?, status='ERROR', error_category=? WHERE id=?",
+                     (datetime.utcnow().isoformat(), ErrorCategory.classify(str(error)).value, row_id))
 
 
 # ------------------------------------------------------------------ backfill of calls made before the ledger existed
