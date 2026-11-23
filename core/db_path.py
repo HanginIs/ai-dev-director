@@ -8,6 +8,7 @@ root, so running the dashboard or CLI from a different cwd can never create a sp
 Test isolation: when DIRECTOR_TESTING=1 and TEST_DB_PATH is set, that path is returned instead.
 """
 import os
+import sqlite3
 from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).resolve().parent.parent
@@ -20,20 +21,38 @@ def get_db_path() -> Path:
     return DEFAULT_DB_PATH
 
 
+class ClosingConnection(sqlite3.Connection):
+    """Finish the transaction, then release its resources even if commit fails.
+
+    sqlite3's own context manager commits/rolls back but does not close. Keep
+    its transaction semantics; only add deterministic cleanup (inspired by
+    eunsebi/ai-dev-director, cecace30795d3a180e0344fc463f215bc315b0cf).
+    """
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            return super().__exit__(exc_type, exc, tb)
+        finally:
+            self.close()
+
+
 def connect(path=None, timeout: float = 30.0):
     """Every Director connection to the SQLite DB. Missions, the console and the bridge write from several threads
     at once; with the default rollback journal and no wait, a busy DB once failed whole mission steps ("database
     disk image is malformed" twice on 2026-11-10). WAL lets readers and one writer work together, and a writer waits
     up to `timeout` seconds for another instead of failing at once."""
-    import sqlite3
-    conn = sqlite3.connect(str(path or get_db_path()), timeout=timeout)
-    conn.execute(f"PRAGMA busy_timeout = {int(timeout * 1000)}")
+    conn = sqlite3.connect(str(path or get_db_path()), timeout=timeout, factory=ClosingConnection)
     try:
-        if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
-            conn.execute("PRAGMA journal_mode = WAL")      # persistent in the DB file; a no-op once set
-    except sqlite3.DatabaseError:
-        pass                                               # another process is switching it right now: keep going
-    return conn
+        conn.execute(f"PRAGMA busy_timeout = {int(timeout * 1000)}")
+        try:
+            if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+                conn.execute("PRAGMA journal_mode = WAL")  # persistent; a no-op once set
+        except sqlite3.DatabaseError:
+            pass                                           # another process may be switching journal mode
+        return conn
+    except BaseException:
+        conn.close()                                       # failed setup must not leak a connection either
+        raise
 
 
 def get_runs_dir() -> Path:

@@ -6,7 +6,7 @@ A local development director that runs logged-in AI coding CLIs (Claude Code, Op
 
 This repository is a fork of [ai-dev-director by DAVZD](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8, changed to work on macOS, with the safety fixes of upstream v3.2.0 (2026-11-21) taken in. The original is Windows-first. This fork adds a native macOS app and hardens how results are applied, how missions are judged and how repositories are handled.
 
-- **Status:** used daily on macOS. All 751 tests pass on macOS (2026-11-15; one test that pretends to be Windows is skipped).
+- **Status:** used daily on macOS. All 11 DB-lifecycle tests pass. The default regression cases recorded 795 passes, one skip and three existing failures (2026-11-23; the same three failures reproduced with the pre-change DB module). See the test limitations below.
 - **Not verified:** the changes in this fork have not been run on Windows or Linux. The complete TRIAD flow using all three live CLIs is also unverified.
 
 The console and all mission messages are in Korean.
@@ -170,6 +170,13 @@ A new mission starts from the current state of the project by default. It contin
 
 ## Data and logs
 
+**Deterministic DB cleanup (2026-11-23):** console, mission and usage-query connections
+close at the end of each `with` block, after commit or rollback, including a failed
+commit. Existing WAL concurrency and the default 30-second lock wait are preserved.
+Login, automatic resume and role assignment are unchanged. Inspired by
+[eunsebi's connection-lifecycle fix](https://github.com/eunsebi/ai-dev-director/commit/cecace30795d3a180e0344fc463f215bc315b0cf),
+adapted to retain this fork's connection settings.
+
 | Location | Contents |
 | --- | --- |
 | `data/director.db` | Runs, states and usage (SQLite, WAL mode) |
@@ -203,6 +210,14 @@ docs/                  design records
 ```
 
 Unit tests do not run the real CLIs and do not touch the working database. Integration tests that use the real CLIs run only with `-m integration_cli`.
+
+DB-lifecycle validation on 2026-11-23: all 11 new tests passed. The full run's
+default cases recorded 795 passes, one Windows-only skip and three retry-test
+failures. All three also reproduced with the previous DB module, with results
+varying between repeated runs. A test source/older Python bytecode mismatch was
+confirmed and remains a separate verification-cache follow-up. An additionally
+selected opt-in live-dashboard test failed because no server was listening on
+8080; it is not counted as a passing default test. No real AI calls were made.
 
 ## What changed from the original
 
