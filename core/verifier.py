@@ -2,6 +2,7 @@ import os
 import sys
 import shlex
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Dict, Any, Optional, Union, List
 from core.git_manager import GitManager
@@ -60,13 +61,20 @@ class Verifier:
                 if resolved:
                     argv[0] = resolved
 
-            res: ProcessResult = ProcessTreeRunner.run(
-                argv=argv,
-                cwd=cwd_str,
-                env=env,
-                timeout=timeout,
-                no_output_timeout=None
-            )
+            # A repair can rewrite a Python file within the same second without
+            # changing its size. Timestamp-based .pyc files would then run the
+            # previous code. Isolate each command's bytecode instead of deleting
+            # the project's (or the operator's configured) caches. Child Python
+            # processes inherit the prefix; no login or project settings change.
+            with tempfile.TemporaryDirectory(prefix="director-verify-pycache-") as cache:
+                env["PYTHONPYCACHEPREFIX"] = cache
+                res: ProcessResult = ProcessTreeRunner.run(
+                    argv=argv,
+                    cwd=cwd_str,
+                    env=env,
+                    timeout=timeout,
+                    no_output_timeout=None
+                )
 
             if res.timed_out:
                 return {

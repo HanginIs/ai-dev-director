@@ -6,7 +6,7 @@ A local development director that runs logged-in AI coding CLIs (Claude Code, Op
 
 This repository is a fork of [ai-dev-director by DAVZD](https://github.com/digilogd-cmd/ai-dev-director) v3.1.8, changed to work on macOS, with the safety fixes of upstream v3.2.0 (2026-11-21) taken in. The original is Windows-first. This fork adds a native macOS app and hardens how results are applied, how missions are judged and how repositories are handled.
 
-- **Status:** used daily on macOS. All 11 DB-lifecycle tests pass. The default regression cases recorded 795 passes, one skip and three existing failures (2026-11-23; the same three failures reproduced with the pre-change DB module). See the test limitations below.
+- **Status:** used daily on macOS. After the verification-cache fix on 2026-11-23, all 807 default regression cases passed, with one Windows-only skip. Two opt-in real-AI/live-dashboard cases were excluded.
 - **Not verified:** the changes in this fork have not been run on Windows or Linux. The complete TRIAD flow using all three live CLIs is also unverified.
 
 The console and all mission messages are in Korean.
@@ -127,6 +127,13 @@ When a milestone that was not verified fails, you are told once, right then ("ê²
 
 Verification commands live in the Director's settings and not inside the project, so that the BUILDER cannot weaken them.
 
+Since 2026-11-23, each verification command receives a private temporary Python
+bytecode cache, inherited by child Python processes. This prevents a same-second,
+same-size source edit from being tested through an older `.pyc`. Existing project
+and user caches are not deleted; only Director's temporary cache is removed after
+the command finishes. Cold imports may cost more time, but verification commands,
+failure criteria and login settings are unchanged.
+
 ## Configuration
 
 - **`config.yaml`:** CLI per role, timeouts, safety caps (`max_files_changed`, `max_diff_lines`), default verification commands, the change history file (`project_history`), autonomy mode and profiles.
@@ -211,13 +218,13 @@ docs/                  design records
 
 Unit tests do not run the real CLIs and do not touch the working database. Integration tests that use the real CLIs run only with `-m integration_cli`.
 
-DB-lifecycle validation on 2026-11-23: all 11 new tests passed. The full run's
-default cases recorded 795 passes, one Windows-only skip and three retry-test
-failures. All three also reproduced with the previous DB module, with results
-varying between repeated runs. A test source/older Python bytecode mismatch was
-confirmed and remains a separate verification-cache follow-up. An additionally
-selected opt-in live-dashboard test failed because no server was listening on
-8080; it is not counted as a passing default test. No real AI calls were made.
+On 2026-11-23, all 11 DB-lifecycle tests passed. Three retry-test failures also
+reproduced with the pre-change DB module; modified test sources were being read
+through older Python bytecode. After isolating verification caches, all nine new
+tests, the 85-case related group and the full default suite passed: **807 passed,
+one Windows-only skip**. Both new stale-cache reproductions fail with the previous
+verifier by reading the old source value. The two opt-in real-AI/live-dashboard
+cases were excluded according to the normal test configuration.
 
 ## What changed from the original
 
